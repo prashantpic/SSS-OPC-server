@@ -1,11 +1,14 @@
+```xml
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <InvariantGlobalization>false</InvariantGlobalization>
     <RootNamespace>IntegrationService</RootNamespace>
+    <!-- Enable XML documentation file generation for Swagger -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn> <!-- Suppress warnings for missing XML comments on non-public members -->
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,16 +20,14 @@
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
     
     <!-- Placeholder for Message Queue Client, replace with specific client like RabbitMQ.Client or Confluent.Kafka -->
-    <!-- <PackageReference Include="RabbitMQ.Client" Version="..." /> -->
-    <!-- <PackageReference Include="Confluent.Kafka" Version="..." /> -->
+    <!-- <PackageReference Include="RabbitMQ.Client" Version="6.8.1" /> -->
+    <!-- <PackageReference Include="Confluent.Kafka" Version="2.3.0" /> -->
 
-    <!-- Assume shared logging/utilities library exists. If REPO-SHARED-UTILS is a project reference: -->
-    <!-- <ProjectReference Include="..\..\..\Shared\RepoSharedUtils\RepoSharedUtils.csproj" /> -->
-    <!-- If REPO-SHARED-UTILS is a NuGet package: -->
-    <!-- <PackageReference Include="REPO-SHARED-UTILS" Version="1.0.0" /> -->
+    <!-- Assume shared logging/utilities library exists (REPO-SHARED-UTILS) -->
+    <!-- <PackageReference Include="REPO.SHARED.UTILS" Version="1.0.0" /> -->
     
-    <!-- Assume client libraries for Data-Service exists for configuration persistence -->
-    <!-- <PackageReference Include="REPO-DATA-SERVICE.Client" Version="1.0.0" /> -->
+    <!-- Assume client libraries for Data-Service exists for configuration persistence (REPO-DATA-SERVICE.Client) -->
+    <!-- <PackageReference Include="REPO.DATA.SERVICE.Client" Version="1.0.0" /> -->
 
   </ItemGroup>
 
@@ -47,3 +48,4 @@
   </ItemGroup>
 
 </Project>
+```

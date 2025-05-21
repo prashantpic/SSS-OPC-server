@@ -1,3 +1,4 @@
+```csharp
 using IntegrationService.Configuration;
 using IntegrationService.BackgroundServices;
 using IntegrationService.Interfaces;
@@ -13,12 +14,12 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.OpenApi.Models;
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using Polly;
-using IntegrationService.Adapters.Blockchain;
-using IntegrationService.Adapters.IoT;
-using IntegrationService.Adapters.DigitalTwin;
+using System.IO;
+using FluentValidation.AspNetCore;
+using IntegrationService.Adapters.Blockchain; // For IBlockchainAdaptor concrete type
+using IntegrationService.Adapters.IoT; // For IIoTPlatformAdaptor concrete types (though not directly registered)
+using IntegrationService.Adapters.DigitalTwin; // For IDigitalTwinAdaptor concrete types (though not directly registered)
+
 
 namespace IntegrationService
 {
@@ -31,27 +32,28 @@ namespace IntegrationService
 
         public static IHostBuilder CreateHostBuilder(string[] args) =>
             Host.CreateDefaultBuilder(args)
-                 .ConfigureLogging(logging =>
+                .ConfigureLogging(logging =>
                 {
                     logging.ClearProviders();
                     logging.AddConsole();
-                    // Integrate with shared logging from REPO-SHARED-UTILS
-                    // Example: logging.AddRepoSharedUtilitiesLogging(Configuration); // Assumes an extension method
+                    // logging.AddDebug(); // Optionally add debug logger
+                    // TODO: Integrate with shared logging from REPO-SHARED-UTILS
+                    // logging.AddSharedLoggingProvider(configuration.GetSection("SharedLoggingConfig"));
                 })
                 .ConfigureAppConfiguration((hostingContext, config) =>
                 {
-                    // appsettings.json and environment-specific appsettings are loaded by default
-                    // Add environment variables explicitly to ensure they override others
-                    config.AddEnvironmentVariables();
-
-                    // Placeholder for advanced configuration sources, e.g., Azure Key Vault
-                    // This would typically read from SecurityConfigs to determine if enabled.
-                    // var builtConfig = config.Build(); // Build temporary config to read vault settings
-                    // var securityConfigs = builtConfig.GetSection("SecurityConfigs").Get<SecurityConfigs>();
-                    // if (securityConfigs?.CredentialManagerType == "AzureKeyVault" && !string.IsNullOrEmpty(securityConfigs.VaultUri))
-                    // {
-                    //    config.AddAzureKeyVault(new Uri(securityConfigs.VaultUri), new DefaultAzureCredential());
-                    // }
+                    // Default configuration sources are already added by CreateDefaultBuilder:
+                    // appsettings.json, appsettings.{Environment}.json, Environment Variables, Command-line arguments.
+                    // Optionally add other sources like Azure Key Vault:
+                    /*
+                    var builtConfig = config.Build(); // Build temporary config to read vault URI
+                    var keyVaultUri = builtConfig["SecurityConfigs:VaultUri"];
+                    if (!string.IsNullOrEmpty(keyVaultUri) && builtConfig["SecurityConfigs:CredentialManagerType"] == "AzureKeyVault")
+                    {
+                        // Requires Azure.Extensions.AspNetCore.Configuration.Secrets and Azure.Identity
+                        // config.AddAzureKeyVault(new Uri(keyVaultUri), new DefaultAzureCredential());
+                    }
+                    */
                 })
                 .ConfigureWebHostDefaults(webBuilder =>
                 {
@@ -62,14 +64,19 @@ namespace IntegrationService
     public class Startup
     {
         public IConfiguration Configuration { get; }
+        private readonly ILogger<Startup> _logger;
 
-        public Startup(IConfiguration configuration)
+        public Startup(IConfiguration configuration, ILogger<Startup> logger)
         {
             Configuration = configuration;
+            _logger = logger;
+            _logger.LogInformation("IntegrationService Startup configuration loaded.");
         }
 
         public void ConfigureServices(IServiceCollection services)
         {
+            _logger.LogInformation("Configuring services...");
+
             // Configure strongly typed settings
             services.Configure<IntegrationSettings>(Configuration.GetSection(IntegrationSettings.SectionName));
             services.Configure<FeatureFlags>(Configuration.GetSection("FeatureFlags"));
@@ -82,15 +89,14 @@ namespace IntegrationService
             services.AddSwaggerGen(c =>
             {
                 c.SwaggerDoc("v1", new OpenApiInfo { Title = "Integration Service API", Version = "v1" });
-                // Optional: Include XML comments for API documentation
-                // var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
-                // var xmlPath = System.IO.Path.Combine(System.AppContext.BaseDirectory, xmlFile);
-                // if (System.IO.File.Exists(xmlPath))
-                // {
-                //     c.IncludeXmlComments(xmlPath);
-                // }
+                var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
+                var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+                if (File.Exists(xmlPath))
+                {
+                    c.IncludeXmlComments(xmlPath);
+                }
             });
-            services.AddHttpClient(); // For general HttpClientFactory usage
+            services.AddHttpClient(); // For HttpIoTAdaptor and HttpDigitalTwinAdaptor
 
             // Add application services and interfaces
             services.AddSingleton<IDataMapper, DataMappingService>();
@@ -101,84 +107,122 @@ namespace IntegrationService
 
             services.AddSingleton<IncomingIoTDataValidator>();
 
-            // Register Adaptors. These are typically managed by their respective Integration Services.
-            // If adaptors need to be resolved independently or have complex lifecycles not tied to an Integration Service,
-            // they could be registered here (e.g., as Scoped or Transient if they use HttpClient directly without factory,
-            // or Singleton if they manage long-lived connections and are thread-safe).
-            // For this design, IntegrationServices will instantiate them.
-            // Exception: IBlockchainAdaptor is used by BlockchainIntegrationService.
+            // Register specific Blockchain Adaptor implementation
             services.AddSingleton<IBlockchainAdaptor, NethereumBlockchainAdaptor>();
-            // IIoTPlatformAdaptor and IDigitalTwinAdaptor are not registered directly as they are lists/factories within services.
 
-            // Register Integration Services - Singleton as they are used by HostedServices.
+
+            // Register Integration Services - Singleton as they manage long-lived adaptors and are used by HostedServices.
             services.AddSingleton<IoTIntegrationService>();
             services.AddSingleton<BlockchainIntegrationService>();
             services.AddSingleton<DigitalTwinIntegrationService>();
 
-            // Register Hosted Services (Message Consumers, Background Sync Tasks)
+            // Register Hosted Services
             services.AddHostedService<OpcDataConsumer>();
             services.AddHostedService<DigitalTwinSyncService>();
 
-            // Placeholder for Message Queue Client (specific to technology chosen)
-            // E.g., services.AddSingleton<IMessageQueueClient, MyRabbitMQClient>();
+            // Add placeholder for Message Queue Client (specific to technology chosen)
+            // e.g., services.AddSingleton<IMessageQueueProducer, RabbitMqProducer>();
+            // e.g., services.AddSingleton<IMessageQueueConsumer, RabbitMqConsumer>(); // OpcDataConsumer would then use this
 
-            // Placeholder for REPO-DATA-SERVICE client interfaces if controllers/services need them for configuration persistence
-            // E.g., services.AddScoped<IPlatformConfigRepository, PlatformConfigRepositoryClient>();
+            // Add placeholder for REPO-DATA-SERVICE client interfaces if controllers/services need them
+            // e.g., services.AddScoped<IConfigurationPersistenceService, DataServiceConfigurationClient>();
 
-            // Optional: Add FluentValidation validators if used more broadly
-            // services.AddFluentValidationAutoValidation();
-            // services.AddFluentValidationClientsideAdapters();
+            // Add FluentValidation
+            services.AddFluentValidationAutoValidation(); // Automatically registers validators and enables ASP.NET Core integration
+            services.AddFluentValidationClientsideAdapters(); // For client-side validation (if using MVC/Razor Pages)
+            // Note: IncomingIoTDataValidator itself is not registered as an IValidator<T> here,
+            // but is injected directly. If using FluentValidation's ASP.NET Core integration,
+            // you'd typically register validators like:
             // services.AddValidatorsFromAssemblyContaining<IncomingIoTDataValidator>();
+
+            _logger.LogInformation("Service configuration completed.");
         }
 
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env, ILogger<Startup> logger)
         {
+            logger.LogInformation("Configuring application pipeline for environment: {EnvironmentName}", env.EnvironmentName);
+
             if (env.IsDevelopment())
             {
                 app.UseDeveloperExceptionPage();
                 app.UseSwagger();
                 app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Integration Service API v1"));
-                logger.LogInformation("Swagger UI enabled at /swagger");
+                logger.LogInformation("Swagger UI enabled for development.");
             }
             else
             {
-                app.UseExceptionHandler("/Error"); // Create an ErrorController or Razor page for this
-                app.UseHsts();
+                app.UseExceptionHandler("/Error"); // Generic error handler
+                app.UseHsts(); // Adds HSTS headers
             }
 
-            app.UseHttpsRedirection(); // Enforce HTTPS
+            app.UseHttpsRedirection(); // Redirect HTTP to HTTPS
 
             app.UseRouting();
 
-            // Add authentication and authorization middleware if needed
-            // app.UseAuthentication();
-            // app.UseAuthorization();
+            // app.UseAuthentication(); // If authentication is configured
+            // app.UseAuthorization();  // If authorization is configured
 
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapControllers();
-                // Optional: Map health checks endpoints
-                // endpoints.MapHealthChecks("/health");
+                // Add health check endpoint
+                endpoints.MapHealthChecks("/health"); // Requires services.AddHealthChecks() in ConfigureServices
             });
 
-            logger.LogInformation("Integration Service application started successfully in {EnvironmentName} mode.", env.EnvironmentName);
+            logger.LogInformation("Application pipeline configured.");
 
-            // Optionally, trigger initial connections or setup for services on startup
-            // This ensures services are ready to process data immediately.
-            // Be mindful of startup time impact.
-            // var serviceProvider = app.ApplicationServices;
-            // _ = serviceProvider.GetRequiredService<IoTIntegrationService>().ConnectAllAdaptorsAsync();
-            // _ = serviceProvider.GetRequiredService<DigitalTwinIntegrationService>().ConnectAllAdaptorsAsync();
-            // The Blockchain adaptor connection is already initiated in its constructor.
+            // Optional: Trigger initial connection for critical adaptors on startup
+            // This ensures they are ready. HostedServices usually manage their own startup.
+            var serviceProvider = app.ApplicationServices;
+            var iotService = serviceProvider.GetService<IoTIntegrationService>();
+            var blockchainService = serviceProvider.GetService<BlockchainIntegrationService>(); // BlockchainIntegrationService constructor already connects
+            var dtService = serviceProvider.GetService<DigitalTwinIntegrationService>();
+
+            // Asynchronously connect adaptors without blocking startup.
+            // IoTIntegrationService and DigitalTwinIntegrationService should ideally handle
+            // connecting adaptors gracefully during their initialization or first use.
+            // If explicit startup connection is desired:
+            /*
+            Task.Run(async () => {
+                logger.LogInformation("Initiating startup connection for IoT adaptors...");
+                await iotService?.ConnectAllAdaptorsAsync();
+                logger.LogInformation("Startup connection for IoT adaptors attempt finished.");
+
+                logger.LogInformation("Initiating startup connection for Digital Twin adaptors...");
+                await dtService?.ConnectAllAdaptorsAsync();
+                logger.LogInformation("Startup connection for Digital Twin adaptors attempt finished.");
+            });
+            */
+             logger.LogInformation("Application started. Integration services are initializing their adaptors if applicable.");
         }
     }
 
-    // These configuration classes are typically defined in their own files within a Configuration namespace.
-    // For Program.cs to reference them as IOptions<T>, they need to be defined.
-    // Assuming they are properly defined in the Configuration/ folder.
-    // If FeatureFlags is not a separate class but part of IntegrationSettings, adjust DI registration.
+    // These classes are defined here for simplicity as they are used directly by IOptions<T> in Startup.
+    // In a larger application, they would be in their own files under the Configuration namespace.
+    public class FeatureFlags
+    {
+        public bool EnableMqttIntegration { get; set; } = true;
+        public bool EnableAmqpIntegration { get; set; } = false;
+        public bool EnableHttpIoTIntegration { get; set; } = true;
+        public bool EnableBlockchainLogging { get; set; } = true;
+        public bool EnableDigitalTwinSync { get; set; } = true;
+        public bool EnableIoTRuleBasedMapping { get; set; } = true;
+        public bool EnableBiDirectionalIoT { get; set; } = true;
+    }
 
-    // public class FeatureFlags { ... } // Defined in Configuration/IntegrationSettings.cs or similar
-    // public class ResiliencyConfigs { ... } // Defined in Configuration/IntegrationSettings.cs or similar
-    // public class SecurityConfigs { ... } // Defined in Configuration/IntegrationSettings.cs or similar
+    public class ResiliencyConfigs
+    {
+        public int DefaultRetryAttempts { get; set; } = 3;
+        public int DefaultRetryDelaySeconds { get; set; } = 2;
+        public int DefaultCircuitBreakerThresholdExceptionsAllowed { get; set; } = 5;
+        public int DefaultCircuitBreakDurationSeconds { get; set; } = 30;
+    }
+
+    public class SecurityConfigs
+    {
+        public string CredentialManagerType { get; set; } = "Configuration"; // Default to reading from appsettings
+        public string VaultUri { get; set; } = string.Empty;
+        public string DefaultTenantIdForCloudServices { get; set; } = string.Empty;
+    }
 }
+```
