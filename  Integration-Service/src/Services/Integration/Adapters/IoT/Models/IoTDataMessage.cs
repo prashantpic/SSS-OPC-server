@@ -1,37 +1,34 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 
 namespace IntegrationService.Adapters.IoT.Models
 {
     /// <summary>
-    /// Data Transfer Object for messages sent to/from IoT platforms.
+    /// Represents a generic data payload for telemetry or events being sent to or received from an IoT platform.
+    /// REQ-8-005
     /// </summary>
     public record IoTDataMessage
     {
         /// <summary>
-        /// Unique identifier for the device originating the data.
+        /// Identifier of the device sending or targeted by the message.
         /// </summary>
-        public string DeviceId { get; init; } = string.Empty;
+        public required string DeviceId { get; init; }
 
         /// <summary>
-        /// Timestamp when the data was generated or recorded.
+        /// Timestamp of when the data was generated or received.
         /// </summary>
-        public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
+        public DateTimeOffset Timestamp { get; init; }
 
         /// <summary>
-        /// The actual data payload. Can be a structured object or raw data.
-        /// Use `object` or a specific base type if payload structure is standardized internally.
+        /// The actual data payload. Can be a complex object.
+        /// Using JsonElement to represent a flexible JSON structure.
         /// </summary>
-        public object? Payload { get; init; }
+        public JsonElement Payload { get; init; }
 
         /// <summary>
-        /// Optional metadata associated with the message (e.g., sensor type, location).
+        /// Optional metadata associated with the message.
         /// </summary>
-        public Dictionary<string, string> Metadata { get; init; } = new Dictionary<string, string>();
-
-        /// <summary>
-        /// Optional identifier for the message, e.g., for tracking.
-        /// </summary>
-        public string MessageId { get; init; } = Guid.NewGuid().ToString();
+        public IReadOnlyDictionary<string, string>? Metadata { get; init; }
     }
 }

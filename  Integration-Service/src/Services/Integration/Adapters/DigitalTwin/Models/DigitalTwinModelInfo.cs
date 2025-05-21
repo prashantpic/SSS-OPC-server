@@ -1,23 +1,34 @@
+using System.Text.Json;
+
 namespace IntegrationService.Adapters.DigitalTwin.Models
 {
     /// <summary>
-    /// Model representing versioning and compatibility information for a Digital Twin model.
+    /// Stores information about digital twin model versions (e.g., DTDL model ID and version)
+    /// to assist with compatibility checks and ensure correct data mapping and interaction logic.
+    /// REQ-8-011
     /// </summary>
     public record DigitalTwinModelInfo
     {
         /// <summary>
-        /// The unique identifier for the Digital Twin model (e.g., DTDL model ID).
+        /// The unique identifier of the Digital Twin model (e.g., DTDL ID like "dtmi:com:example:Thermostat;1").
         /// </summary>
-        public string ModelId { get; init; } = string.Empty;
+        public required string ModelId { get; init; }
 
         /// <summary>
         /// The version of the Digital Twin model.
         /// </summary>
-        public string Version { get; init; } = string.Empty;
+        public required string Version { get; init; }
 
         /// <summary>
-        /// Any additional capability or schema information needed for compatibility checks.
+        /// The actual definition of the model, typically in JSON format (e.g., DTDL content).
+        /// This can be used for validation or dynamic interaction if needed.
+        /// Stored as JsonElement for flexibility.
         /// </summary>
-        public object? Schema { get; init; } // Could be the full DTDL JSON, or a parsed structure
+        public JsonElement? Definition { get; init; }
+
+        /// <summary>
+        /// Display name for the model, if available.
+        /// </summary>
+        public string? DisplayName { get; init; }
     }
 }

@@ -1,36 +1,35 @@
 using System;
+using System.Collections.Generic;
 
 namespace IntegrationService.Adapters.Blockchain.Models
 {
     /// <summary>
-    /// Model for requesting a blockchain transaction (e.g., logging critical data).
+    /// Defines the data structure needed to initiate a blockchain logging operation.
+    /// REQ-8-007
     /// </summary>
     public record BlockchainTransactionRequest
     {
         /// <summary>
-        /// The data to be logged (or its hash).
-        /// Hashing before logging is often preferred for privacy/size.
+        /// The hash of the data to be logged. Typically a SHA256 hash.
         /// </summary>
-        public string DataPayload { get; init; } = string.Empty; // Could be hash or raw data (if small/non-sensitive)
+        public required string DataHash { get; init; }
 
         /// <summary>
-        /// Timestamp associated with the data.
+        /// Identifier for the source system or data origin.
         /// </summary>
-        public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
+        public required string SourceId { get; init; }
 
         /// <summary>
-        /// Identifier for the source of the data (e.g., OPC client ID, tag ID).
+        /// Timestamp of the original event or data generation.
         /// </summary>
-        public string SourceId { get; init; } = string.Empty;
+        public DateTimeOffset Timestamp { get; init; }
 
         /// <summary>
-        /// Any additional metadata relevant to the transaction.
+        /// Optional parameters for the smart contract function call, if different from standard.
+        /// Key-value pairs where key is parameter name and value is the parameter value.
+        /// This might be used for more complex smart contracts, but for a simple logData,
+        /// DataHash, SourceId, and Timestamp are primary.
         /// </summary>
-        public string Metadata { get; init; } = string.Empty; // e.g., JSON string of key-value pairs
-
-        /// <summary>
-        /// Identifier for the specific smart contract function to call (if needed).
-        /// </summary>
-        public string? FunctionName { get; init; }
+        public IReadOnlyDictionary<string, object>? SmartContractParameters { get; init; }
     }
 }

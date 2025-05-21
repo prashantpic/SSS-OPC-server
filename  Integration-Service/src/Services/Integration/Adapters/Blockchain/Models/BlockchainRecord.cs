@@ -3,33 +3,45 @@ using System;
 namespace IntegrationService.Adapters.Blockchain.Models
 {
     /// <summary>
-    /// Model representing a record retrieved from the blockchain.
+    /// Represents the structure of data once it has been logged to or queried from the blockchain.
+    /// This typically mirrors the event structure or return values from smart contract functions.
+    /// REQ-8-007, REQ-8-008
     /// </summary>
     public record BlockchainRecord
     {
         /// <summary>
-        /// The hash of the blockchain transaction.
+        /// The transaction hash on the blockchain.
         /// </summary>
-        public string TransactionHash { get; init; } = string.Empty;
+        public required string TransactionHash { get; init; }
 
         /// <summary>
         /// The block number where the transaction was included.
         /// </summary>
-        public ulong BlockNumber { get; init; }
+        public long BlockNumber { get; init; }
 
         /// <summary>
-        /// The timestamp of the block or transaction.
+        /// The timestamp of the original event (as logged in the transaction).
         /// </summary>
-        public DateTimeOffset Timestamp { get; init; }
+        public DateTimeOffset EventTimestamp { get; init; }
 
         /// <summary>
-        /// The data payload logged in the transaction (or its hash).
+        /// The timestamp of the block where this transaction was mined.
         /// </summary>
-        public string DataPayload { get; init; } = string.Empty; // Matches BlockchainTransactionRequest DataPayload
+        public DateTimeOffset BlockTimestamp { get; init; }
 
         /// <summary>
-        /// Optional metadata retrieved from the blockchain event or state.
+        /// The hash of the data that was logged.
         /// </summary>
-        public string Metadata { get; init; } = string.Empty; // e.g., Event arguments serialized
+        public required string DataHash { get; init; }
+
+        /// <summary>
+        /// Identifier of the source system or data origin.
+        /// </summary>
+        public required string SourceId { get; init; }
+
+        /// <summary>
+        /// Indicates if the record is considered valid (e.g., if retrieved from a query).
+        /// </summary>
+        public bool IsValid { get; init; } = true;
     }
 }

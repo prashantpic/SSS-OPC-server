@@ -1,64 +1,97 @@
 [
   {
-    "anonymous": false,
+    "type": "function",
+    "name": "logData",
     "inputs": [
       {
-        "indexed": true,
-        "internalType": "string",
-        "name": "sourceId",
-        "type": "string"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
         "name": "dataHash",
-        "type": "string"
+        "type": "bytes32",
+        "internalType": "bytes32"
       },
       {
-        "indexed": false,
-        "internalType": "uint256",
+        "name": "sourceId",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
         "name": "timestamp",
-        "type": "uint256"
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
-    "name": "CriticalDataLogged",
-    "type": "event"
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
+    "type": "event",
+    "name": "DataLogged",
     "inputs": [
       {
-        "internalType": "string",
-        "name": "_sourceId",
-        "type": "string"
+        "name": "dataHash",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
       },
       {
-        "internalType": "string",
-        "name": "_dataHash",
-        "type": "string"
+        "name": "sourceId",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      },
+      {
+        "name": "timestamp",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "blockTimestamp",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       }
     ],
-    "name": "logCriticalData",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
+    "anonymous": false
   },
   {
+    "type": "function",
+    "name": "getDataLog",
     "inputs": [
       {
-        "internalType": "string",
-        "name": "_sourceId",
-        "type": "string"
+        "name": "dataHash",
+        "type": "bytes32",
+        "internalType": "bytes32"
       }
     ],
-    "name": "getLatestDataHash",
     "outputs": [
       {
-        "internalType": "string",
         "name": "",
-        "type": "string"
+        "type": "tuple",
+        "internalType": "struct CriticalDataLog.LogEntry",
+        "components": [
+          {
+            "name": "sourceId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "timestamp",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "blockTimestamp",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "isValid",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   }
 ]
