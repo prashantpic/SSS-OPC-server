@@ -1,43 +1,46 @@
 namespace OrchestrationService.Api.Dtos;
 
 /// <summary>
-/// DTO for returning the current status and details of a workflow instance.
+/// Represents the response payload containing the status and details of a workflow instance.
 /// </summary>
 public class WorkflowStatusResponseDto
 {
     /// <summary>
-    /// The unique identifier of the workflow instance.
+    /// Gets or sets the unique identifier of the workflow instance.
     /// </summary>
-    public Guid WorkflowId { get; set; }
+    /// <example>"6b0e00a4-7a31-4f95-890e-2d1f34169285"</example>
+    public string WorkflowId { get; set; } = string.Empty;
 
     /// <summary>
-    /// The current status of the workflow instance (e.g., "Runnable", "Complete", "Terminated", "Suspended").
-    /// This is typically a string representation of WorkflowCore.Models.WorkflowStatus.
+    /// Gets or sets the current status of the workflow.
+    /// Common values include: "Runnable", "Suspended", "Complete", "Terminated", "Compensatable".
+    /// (Refer to WorkflowCore.Models.WorkflowStatus for potential enum mapping if stricter typing is preferred)
     /// </summary>
+    /// <example>"Runnable"</example>
     public string Status { get; set; } = string.Empty;
 
     /// <summary>
-    /// The time when the workflow instance was created.
+    /// Gets or sets the name or identifier of the current step the workflow is executing or paused at.
+    /// This might be empty if the workflow is just starting or has completed.
     /// </summary>
-    public DateTime CreateTime { get; set; }
+    /// <example>"InitiateAiAnalysisActivity"</example>
+    public string? CurrentStep { get; set; }
 
     /// <summary>
-    /// The time when the workflow instance completed, if applicable.
-    /// Null if the workflow is not yet complete.
+    /// Gets or sets the timestamp of the last significant event or update for this workflow instance.
     /// </summary>
-    public DateTime? CompleteTime { get; set; }
+    public DateTime LastEventTime { get; set; }
 
     /// <summary>
-    /// Error message if the workflow instance failed or was terminated due to an error.
-    /// Null if no error occurred or if the workflow is still running.
+    /// Gets or sets the persisted data associated with the workflow instance (e.g., ReportGenerationSagaData, BlockchainSyncSagaData).
+    /// The actual type of this object will depend on the workflow.
     /// </summary>
-    public string? ErrorMessage { get; set; }
+    public object? WorkflowData { get; set; }
 
     /// <summary>
-    /// The current persistent data associated with the workflow instance.
-    /// This can be cast to the specific workflow's data type (e.g., ReportGenerationSagaData, BlockchainSyncSagaData)
-    /// by the caller if the workflow type is known.
-    /// The controller may choose to expose only relevant parts of this data or map it to a more specific DTO.
+    /// Gets or sets the reason for failure, if the workflow instance has failed.
+    /// This will be null if the workflow is not in a failed state.
     /// </summary>
-    public object? Data { get; set; }
+    /// <example>"AI Service returned an error during analysis."</example>
+    public string? FailureReason { get; set; }
 }

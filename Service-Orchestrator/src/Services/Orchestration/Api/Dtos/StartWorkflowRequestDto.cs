@@ -1,29 +1,27 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using System.ComponentModel.DataAnnotations;
 
 namespace OrchestrationService.Api.Dtos;
 
 /// <summary>
-/// DTO for starting a generic workflow.
+/// Represents the request payload for starting a new workflow instance.
+/// It specifies the type of workflow to initiate and provides the necessary input data.
 /// </summary>
 public class StartWorkflowRequestDto
 {
     /// <summary>
-    /// The name or identifier of the workflow to start (e.g., "ReportGenerationSaga").
-    /// This should match the Id property of the IWorkflow implementation.
+    /// Gets or sets the type or identifier of the workflow to be started.
+    /// This should match a registered workflow definition name (e.g., "ReportGenerationSaga", "BlockchainSyncSaga").
     /// </summary>
-    public string WorkflowName { get; set; } = string.Empty;
+    /// <example>"ReportGenerationSaga"</example>
+    [Required]
+    public string WorkflowType { get; set; } = string.Empty;
 
     /// <summary>
-    /// Optional version of the workflow to start. If not specified, the workflow host
-    /// might default to the latest registered version.
+    /// Gets or sets the input data for the workflow.
+    /// The structure of this object depends on the specific <see cref="WorkflowType"/>.
+    /// For example, for "ReportGenerationSaga", this would be <see cref="OrchestrationService.Workflows.ReportGeneration.ReportGenerationSagaInput"/>.
+    /// For "BlockchainSyncSaga", this would be <see cref="OrchestrationService.Workflows.BlockchainSync.BlockchainSyncSagaInput"/>.
     /// </summary>
-    public int? Version { get; set; }
-
-    /// <summary>
-    /// The input data for the workflow. This should be a JSON object that can be
-    /// deserialized into the specific workflow's input type (e.g., ReportGenerationSagaInput, BlockchainSyncSagaInput).
-    /// The controller receiving this DTO will handle deserializing this JsonElement to the concrete type.
-    /// </summary>
-    public JsonElement InputData { get; set; }
+    [Required]
+    public object? InputData { get; set; }
 }
