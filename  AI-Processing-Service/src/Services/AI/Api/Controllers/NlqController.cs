@@ -1,17 +1,18 @@
-using Microsoft.AspNetCore.Mvc;
 using AIService.Api.Dtos.Nlq;
-using MediatR;
+using AIService.Application.Nlq.Commands; // Assuming this namespace for command
+using AIService.Application.Nlq.Models;   // Assuming this namespace for result model
 using AutoMapper;
-using System.Threading.Tasks;
-using AIService.Application.Nlq.Commands; // Assuming this command exists
-using AIService.Application.Nlq.Models;   // Assuming this model exists
+using MediatR;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using System.Collections.Generic;
+using System.Threading.Tasks;
+using System;
+using System.Net;
 
 namespace AIService.Api.Controllers
 {
     [ApiController]
-    [Route("api/v1/nlq")]
+    [Route("api/ai/[controller]")]
     public class NlqController : ControllerBase
     {
         private readonly IMediator _mediator;
@@ -20,61 +21,51 @@ namespace AIService.Api.Controllers
 
         public NlqController(IMediator mediator, IMapper mapper, ILogger<NlqController> logger)
         {
-            _mediator = mediator;
-            _mapper = mapper;
-            _logger = logger;
+            _mediator = mediator ?? throw new ArgumentNullException(nameof(mediator));
+            _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
         /// <summary>
-        /// Processes a natural language query.
-        /// REQ-7-013: Natural Language Query Processing
-        /// REQ-7-014: Integration with NLP Providers (handled by application/domain layer)
+        /// Submits a natural language query for processing.
         /// </summary>
-        /// <param name="requestDto">The NLQ request data.</param>
+        /// <param name="dto">The NLQ request data.</param>
         /// <returns>The processed NLQ result.</returns>
+        /// <response code="200">Returns the processed NLQ result.</response>
+        /// <response code="400">If the request is invalid.</response>
+        /// <response code="500">If an internal server error occurs.</response>
         [HttpPost("process")]
-        [ProducesResponseType(typeof(NlqResponseDto), 200)]
-        [ProducesResponseType(400)]
-        [ProducesResponseType(500)]
-        public async Task<IActionResult> PostProcessNlqAsync([FromBody] NlqRequestDto requestDto)
+        [ProducesResponseType(typeof(NlqResponseDto), (int)HttpStatusCode.OK)]
+        [ProducesResponseType((int)HttpStatusCode.BadRequest)]
+        [ProducesResponseType((int)HttpStatusCode.InternalServerError)]
+        public async Task<IActionResult> PostProcessNlqAsync([FromBody] NlqRequestDto dto)
         {
-            if (!ModelState.IsValid)
+            if (dto == null || string.IsNullOrWhiteSpace(dto.Query))
             {
-                _logger.LogWarning("Invalid model state for PostProcessNlqAsync.");
-                return BadRequest(ModelState);
+                return BadRequest("NLQ request cannot be null and query text must be provided.");
             }
-            _logger.LogInformation("Received NLQ request: {QueryText}", requestDto.QueryText);
 
-            var command = _mapper.Map<ProcessNlqCommand>(requestDto);
+            _logger.LogInformation("Received NLQ request: {Query}", dto.Query);
 
-            // Assuming ProcessNlqCommand and NlqProcessingResult exist in the Application layer
-            // var nlqProcessingResult = await _mediator.Send(command);
-
-            // Placeholder logic
-            await Task.Delay(100); // Simulate async work
-            var nlqProcessingResult = new NlqProcessingResult // Placeholder
+            try
             {
-                OriginalQuery = requestDto.QueryText,
-                ProcessedQuery = requestDto.QueryText.ToLower(), // Simplified processing
-                Intent = "GetTemperature",
-                ConfidenceScore = 0.95,
-                ResponseMessage = "Temperature for Pump A is 75°C.",
-                Entities = new List<Application.Nlq.Models.NlqEntity> // Placeholder for Application.Nlq.Models.NlqEntity
+                var command = _mapper.Map<ProcessNlqCommand>(dto); // Assumes ProcessNlqCommand exists
+                var nlqResult = await _mediator.Send(command);
+
+                if (nlqResult == null)
                 {
-                    new Application.Nlq.Models.NlqEntity { Type = "Device", Value = "Pump A", RawValue = "Pump A", StartIndex = 20, EndIndex = 25 },
-                    new Application.Nlq.Models.NlqEntity { Type = "Measurement", Value = "Temperature", RawValue = "Temperature", StartIndex = 0, EndIndex = 10 }
+                    _logger.LogWarning("NLQ processing result was null for query: {Query}", dto.Query);
+                    return StatusCode((int)HttpStatusCode.InternalServerError, "Failed to process NLQ query.");
                 }
-            };
-
-            if (nlqProcessingResult == null)
-            {
-                _logger.LogError("NLQ processing result was null for query: {QueryText}", requestDto.QueryText);
-                return StatusCode(500, "An error occurred while processing the NLQ request.");
+                
+                var responseDto = _mapper.Map<NlqResponseDto>(nlqResult); // Assumes NlqProcessingResult maps to NlqResponseDto
+                return Ok(responseDto);
             }
-
-            var responseDto = _mapper.Map<NlqResponseDto>(nlqProcessingResult);
-            _logger.LogInformation("NLQ processing successful for query: {QueryText}, Intent: {Intent}", responseDto.OriginalQuery, responseDto.Intent);
-            return Ok(responseDto);
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error occurred while processing NLQ request: {Query}", dto.Query);
+                return StatusCode((int)HttpStatusCode.InternalServerError, "An error occurred while processing your request.");
+            }
         }
     }
 }

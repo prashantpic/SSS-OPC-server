@@ -1,16 +1,18 @@
-using Microsoft.AspNetCore.Mvc;
 using AIService.Api.Dtos.PredictiveMaintenance;
-using MediatR;
+using AIService.Application.PredictiveMaintenance.Commands; // Assuming this namespace for command
+using AIService.Application.PredictiveMaintenance.Models;   // Assuming this namespace for result model
 using AutoMapper;
-using System.Threading.Tasks;
-using AIService.Application.PredictiveMaintenance.Commands; // Assuming this command exists
-using AIService.Application.PredictiveMaintenance.Models;   // Assuming this model exists
+using MediatR;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using System.Threading.Tasks;
+using System;
+using System.Net;
 
 namespace AIService.Api.Controllers
 {
     [ApiController]
-    [Route("api/v1/predictive-maintenance")]
+    [Route("api/ai/[controller]")]
     public class PredictiveMaintenanceController : ControllerBase
     {
         private readonly IMediator _mediator;
@@ -19,64 +21,51 @@ namespace AIService.Api.Controllers
 
         public PredictiveMaintenanceController(IMediator mediator, IMapper mapper, ILogger<PredictiveMaintenanceController> logger)
         {
-            _mediator = mediator;
-            _mapper = mapper;
-            _logger = logger;
+            _mediator = mediator ?? throw new ArgumentNullException(nameof(mediator));
+            _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
         /// <summary>
         /// Initiates a maintenance prediction based on input data.
-        /// REQ-7-001: Predictive Maintenance Analysis
-        /// REQ-7-003: Execution of ONNX models (handled by application/domain layer)
         /// </summary>
-        /// <param name="requestDto">The prediction request data.</param>
+        /// <param name="dto">The prediction request data.</param>
         /// <returns>The prediction result.</returns>
+        /// <response code="200">Returns the prediction result.</response>
+        /// <response code="400">If the request is invalid.</response>
+        /// <response code="500">If an internal server error occurs.</response>
         [HttpPost("predict")]
-        [ProducesResponseType(typeof(PredictionResponseDto), 200)]
-        [ProducesResponseType(400)]
-        [ProducesResponseType(500)]
-        public async Task<IActionResult> PostPredictionAsync([FromBody] PredictionRequestDto requestDto)
+        [ProducesResponseType(typeof(PredictionResponseDto), (int)HttpStatusCode.OK)]
+        [ProducesResponseType((int)HttpStatusCode.BadRequest)]
+        [ProducesResponseType((int)HttpStatusCode.InternalServerError)]
+        public async Task<IActionResult> PostPredictionAsync([FromBody] PredictionRequestDto dto)
         {
-            if (!ModelState.IsValid)
+            if (dto == null)
             {
-                _logger.LogWarning("Invalid model state for PostPredictionAsync.");
-                return BadRequest(ModelState);
+                return BadRequest("Prediction request cannot be null.");
             }
 
-            _logger.LogInformation("Received prediction request for model ID: {ModelId}", requestDto.ModelId ?? "Default");
-            
-            var command = _mapper.Map<GetPredictionCommand>(requestDto);
-            
-            // Assuming GetPredictionCommand and PredictionOutput exist in the Application layer
-            // For now, let's create a placeholder for PredictionOutput if it's not defined elsewhere in this generation scope.
-            // In a real scenario, PredictionOutput would be a well-defined class from the application layer.
-            // var predictionOutput = await _mediator.Send(command);
+            _logger.LogInformation("Received prediction request for model {ModelId}", dto.ModelId);
 
-            // Placeholder logic until Application Layer is fully defined
-            // Simulate sending command and receiving output
-            await Task.Delay(100); // Simulate async work
-            var predictionOutput = new PredictionOutput // This is a placeholder
+            try
             {
-                PredictionId = System.Guid.NewGuid().ToString(),
-                ModelIdUsed = requestDto.ModelId ?? "default_pm_model_v1",
-                Timestamp = System.DateTimeOffset.UtcNow,
-                Results = new System.Collections.Generic.Dictionary<string, object>
+                var command = _mapper.Map<GetPredictionCommand>(dto);
+                var predictionResult = await _mediator.Send(command);
+
+                if (predictionResult == null)
                 {
-                    { "RemainingUsefulLife", 120.5 },
-                    { "FailureProbability", 0.15 }
+                    _logger.LogWarning("Prediction result was null for model {ModelId}", dto.ModelId);
+                    return StatusCode((int)HttpStatusCode.InternalServerError, "Failed to get prediction.");
                 }
-            };
-
-
-            if (predictionOutput == null)
-            {
-                _logger.LogError("Prediction output was null for model ID: {ModelId}", requestDto.ModelId ?? "Default");
-                return StatusCode(500, "An error occurred while processing the prediction.");
+                
+                var responseDto = _mapper.Map<PredictionResponseDto>(predictionResult);
+                return Ok(responseDto);
             }
-
-            var responseDto = _mapper.Map<PredictionResponseDto>(predictionOutput);
-            _logger.LogInformation("Prediction successful for model ID: {ModelId}", responseDto.ModelIdUsed);
-            return Ok(responseDto);
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error occurred while processing prediction request for model {ModelId}", dto.ModelId);
+                return StatusCode((int)HttpStatusCode.InternalServerError, "An error occurred while processing your request.");
+            }
         }
     }
 }

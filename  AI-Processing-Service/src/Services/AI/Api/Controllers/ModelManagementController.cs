@@ -1,135 +1,147 @@
-using Microsoft.AspNetCore.Mvc;
 using AIService.Api.Dtos.ModelManagement;
-using AIService.Application.Interfaces; // Assuming IModelManagementAppService is here
-using System.Threading.Tasks;
-using Microsoft.Extensions.Logging;
+using AIService.Application.ModelManagement.Commands; // Assuming this namespace for commands
 using AutoMapper;
 using MediatR;
-using AIService.Application.ModelManagement.Commands; // Assuming RegisterModelFeedbackCommand is here
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using System;
+using System.Net;
+using System.Threading.Tasks;
 
 namespace AIService.Api.Controllers
 {
     [ApiController]
-    [Route("api/v1/models")]
+    [Route("api/ai/[controller]")]
     public class ModelManagementController : ControllerBase
     {
-        private readonly IModelManagementAppService _modelManagementAppService;
         private readonly IMediator _mediator;
         private readonly IMapper _mapper;
         private readonly ILogger<ModelManagementController> _logger;
 
-        public ModelManagementController(
-            IModelManagementAppService modelManagementAppService,
-            IMediator mediator,
-            IMapper mapper,
-            ILogger<ModelManagementController> logger)
+        public ModelManagementController(IMediator mediator, IMapper mapper, ILogger<ModelManagementController> logger)
         {
-            _modelManagementAppService = modelManagementAppService;
-            _mediator = mediator;
-            _mapper = mapper;
-            _logger = logger;
+            _mediator = mediator ?? throw new ArgumentNullException(nameof(mediator));
+            _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
         /// <summary>
-        /// Uploads a custom AI model.
-        /// REQ-7-004: MLOps Integration (partially, via AppService)
-        /// REQ-7-005: Model Feedback Loop (related to model lifecycle)
+        /// Uploads a new AI model.
         /// </summary>
         /// <param name="dto">The model upload request data.</param>
-        /// <returns>Status of the upload operation.</returns>
+        /// <returns>Status of the model upload operation.</returns>
+        /// <response code="201">If the model was uploaded successfully.</response>
+        /// <response code="400">If the request is invalid.</response>
+        /// <response code="500">If an internal server error occurs.</response>
         [HttpPost("upload")]
-        [Consumes("multipart/form-data")]
-        [ProducesResponseType(201)]
-        [ProducesResponseType(400)]
-        [ProducesResponseType(500)]
+        [ProducesResponseType(StatusCodes.Status201Created)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> PostModelUploadAsync([FromForm] ModelUploadRequestDto dto)
         {
-            if (!ModelState.IsValid || dto.ModelFile == null || dto.ModelFile.Length == 0)
+            if (dto == null || dto.File == null || dto.File.Length == 0)
             {
-                _logger.LogWarning("Invalid model upload request.");
-                return BadRequest("Invalid model upload request. Ensure all fields are provided and the file is not empty.");
+                return BadRequest("Model upload request is invalid or file is missing/empty.");
             }
-            
-            _logger.LogInformation("Received model upload request for model: {ModelName} version {ModelVersion}", dto.ModelName, dto.ModelVersion);
 
-            // In a real app, IModelManagementAppService.UploadModelAsync would take more structured input
-            // possibly mapped from the DTO or the DTO itself.
-            // For now, this is a simplified call.
-            // The actual implementation for UploadModelAsync should be in the Application layer.
-            // public async Task<string> UploadModelAsync(string modelName, stringmodelVersion, string modelType, string modelFormat, string description, Stream modelStream, string fileName)
+            _logger.LogInformation("Received model upload request for model: {ModelName}, Version: {ModelVersion}", dto.Name, dto.Version);
 
-            using var modelStream = dto.ModelFile.OpenReadStream();
-            var modelId = await _modelManagementAppService.UploadModelAsync(
-                dto.ModelName,
-                dto.ModelVersion,
-                dto.ModelType,
-                dto.ModelFormat,
-                dto.Description,
-                modelStream,
-                dto.ModelFile.FileName);
-
-            if (string.IsNullOrEmpty(modelId))
+            try
             {
-                 _logger.LogError("Model upload failed for model: {ModelName} version {ModelVersion}", dto.ModelName, dto.ModelVersion);
-                return StatusCode(500, new { message = "Model upload failed." });
+                // In a real scenario, UploadModelCommand would be more complex or IModelManagementAppService would be used by the handler
+                // For simplicity, assuming direct mapping can occur, or command has these properties
+                var command = _mapper.Map<UploadModelCommand>(dto); 
+                // If AutoMapper cannot map IFormFile, you might need to set it manually or adjust the command
+                // command.ModelFileStream = dto.File.OpenReadStream();
+                // command.ModelFileName = dto.File.FileName;
+                
+                // The SDS is a bit mixed here. For consistency with other controllers, using MediatR.
+                // The handler for UploadModelCommand would then potentially use IModelManagementAppService.
+                // var command = new UploadModelCommand // Manually create if mapper is problematic
+                // {
+                //     Name = dto.Name,
+                //     Version = dto.Version,
+                //     ModelType = dto.ModelType,
+                //     ModelFormat = dto.ModelFormat,
+                //     Description = dto.Description,
+                //     File = dto.File // The command object needs to be able to accept IFormFile or a stream
+                // };
+
+
+                var result = await _mediator.Send(command); // Assuming UploadModelCommand and its handler exist
+
+                // Assuming the handler returns some form of ModelId or success indication.
+                // For this example, let's assume it returns a string ModelId upon success.
+                if (result != null) // Adjust based on actual command handler return type
+                {
+                     _logger.LogInformation("Model {ModelName} uploaded successfully with ID: {ModelId}", dto.Name, result);
+                    return CreatedAtAction(nameof(GetModelStatusAsync), new { modelId = result.ToString() }, result); // Assuming GetModelStatusAsync exists
+                }
+                return StatusCode((int)HttpStatusCode.InternalServerError, "Failed to upload model.");
             }
-            
-            _logger.LogInformation("Model {ModelName} version {ModelVersion} uploaded successfully with ID: {ModelId}", dto.ModelName, dto.ModelVersion, modelId);
-            return CreatedAtAction(nameof(GetModelStatusAsync), new { modelId = modelId }, new { modelId = modelId, message = "Model uploaded successfully." });
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error occurred while uploading model: {ModelName}", dto.Name);
+                return StatusCode((int)HttpStatusCode.InternalServerError, "An error occurred while processing your request.");
+            }
         }
 
         /// <summary>
         /// Submits feedback for an AI model's prediction.
-        /// REQ-7-005: Model Feedback Loop
-        /// REQ-7-011: Anomaly Labeling (covered by feedback DTO)
         /// </summary>
         /// <param name="dto">The model feedback request data.</param>
         /// <returns>Status of the feedback submission.</returns>
+        /// <response code="202">If the feedback was accepted for processing.</response>
+        /// <response code="400">If the request is invalid.</response>
+        /// <response code="500">If an internal server error occurs.</response>
         [HttpPost("feedback")]
-        [ProducesResponseType(202)]
-        [ProducesResponseType(400)]
-        [ProducesResponseType(500)]
+        [ProducesResponseType(StatusCodes.Status202Accepted)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> PostModelFeedbackAsync([FromBody] ModelFeedbackRequestDto dto)
         {
-            if (!ModelState.IsValid)
+            if (dto == null)
             {
-                _logger.LogWarning("Invalid model feedback request.");
-                return BadRequest(ModelState);
+                return BadRequest("Model feedback request cannot be null.");
             }
-            _logger.LogInformation("Received model feedback for model ID: {ModelId}, Prediction ID: {PredictionId}", dto.ModelId, dto.PredictionId);
 
-            var command = _mapper.Map<RegisterModelFeedbackCommand>(dto);
-            await _mediator.Send(command); // Fire-and-forget or handle result
+            _logger.LogInformation("Received feedback for model {ModelId}, Prediction: {PredictionId}", dto.ModelId, dto.PredictionId);
             
-            _logger.LogInformation("Model feedback for model ID: {ModelId} processed.", dto.ModelId);
-            return Accepted(new { message = "Feedback received and is being processed." });
+            try
+            {
+                var command = _mapper.Map<RegisterModelFeedbackCommand>(dto); // Assumes RegisterModelFeedbackCommand exists
+                await _mediator.Send(command); // Assuming this command doesn't return a significant result beyond success/failure handled by exceptions
+                
+                _logger.LogInformation("Feedback for model {ModelId} registered successfully.", dto.ModelId);
+                return Accepted();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error occurred while registering feedback for model {ModelId}", dto.ModelId);
+                return StatusCode((int)HttpStatusCode.InternalServerError, "An error occurred while processing your request.");
+            }
         }
 
+        // Placeholder for GetModelStatusAsync - REQ-7-010 implies model status retrieval.
+        // This would typically be a GET request.
         /// <summary>
-        /// Gets the status of a specific AI model. (Placeholder for a GET endpoint)
-        /// REQ-7-010: AI Model Performance Monitoring (status is part of this)
+        /// Gets the status of a specific AI model.
         /// </summary>
         /// <param name="modelId">The ID of the model.</param>
         /// <returns>The model status.</returns>
         [HttpGet("{modelId}/status")]
-        [ProducesResponseType(typeof(object), 200)] // Replace object with a ModelStatusDto
-        [ProducesResponseType(404)]
-        [ProducesResponseType(500)]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
         public async Task<IActionResult> GetModelStatusAsync(string modelId)
         {
-             _logger.LogInformation("Requesting status for model ID: {ModelId}", modelId);
-            // var status = await _modelManagementAppService.GetModelStatusAsync(modelId);
-            // Placeholder logic
-            await Task.Delay(50);
-            var status = new { ModelId = modelId, Status = "Ready", LastUpdated = System.DateTimeOffset.UtcNow };
-
-            if (status == null)
-            {
-                _logger.LogWarning("Model with ID {ModelId} not found for status check.", modelId);
-                return NotFound(new { message = $"Model with ID {modelId} not found." });
-            }
-            _logger.LogInformation("Status for model ID {ModelId} is {Status}", modelId, status.Status);
-            return Ok(status);
+            _logger.LogInformation("Requesting status for model {modelId}", modelId);
+            // var query = new GetModelStatusCommand { ModelId = modelId };
+            // var status = await _mediator.Send(query);
+            // if (status == null) return NotFound();
+            // return Ok(status);
+            await Task.CompletedTask; // Placeholder
+            return Ok(new { ModelId = modelId, Status = "NotImplemented" });
         }
     }
 }

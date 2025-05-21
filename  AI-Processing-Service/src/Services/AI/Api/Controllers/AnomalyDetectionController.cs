@@ -1,17 +1,18 @@
-using Microsoft.AspNetCore.Mvc;
 using AIService.Api.Dtos.AnomalyDetection;
-using MediatR;
+using AIService.Application.AnomalyDetection.Commands; // Assuming this namespace for command
+using AIService.Application.AnomalyDetection.Models;   // Assuming this namespace for result model
 using AutoMapper;
-using System.Threading.Tasks;
-using AIService.Application.AnomalyDetection.Commands; // Assuming this command exists
-using AIService.Application.AnomalyDetection.Models;   // Assuming this model exists
+using MediatR;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using System.Collections.Generic; // Required for List
+using System.Threading.Tasks;
+using System;
+using System.Net;
 
 namespace AIService.Api.Controllers
 {
     [ApiController]
-    [Route("api/v1/anomaly-detection")]
+    [Route("api/ai/[controller]")]
     public class AnomalyDetectionController : ControllerBase
     {
         private readonly IMediator _mediator;
@@ -20,58 +21,51 @@ namespace AIService.Api.Controllers
 
         public AnomalyDetectionController(IMediator mediator, IMapper mapper, ILogger<AnomalyDetectionController> logger)
         {
-            _mediator = mediator;
-            _mapper = mapper;
-            _logger = logger;
+            _mediator = mediator ?? throw new ArgumentNullException(nameof(mediator));
+            _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
         /// <summary>
         /// Submits data to detect anomalies.
-        /// REQ-7-008: Anomaly Detection
         /// </summary>
-        /// <param name="requestDto">The anomaly detection request data.</param>
-        /// <returns>The anomaly detection result.</returns>
+        /// <param name="dto">The anomaly detection request data.</param>
+        /// <returns>The anomaly detection results.</returns>
+        /// <response code="200">Returns the detected anomalies.</response>
+        /// <response code="400">If the request is invalid.</response>
+        /// <response code="500">If an internal server error occurs.</response>
         [HttpPost("detect")]
-        [ProducesResponseType(typeof(AnomalyDetectionResponseDto), 200)]
-        [ProducesResponseType(400)]
-        [ProducesResponseType(500)]
-        public async Task<IActionResult> PostAnomalyDetectionAsync([FromBody] AnomalyDetectionRequestDto requestDto)
+        [ProducesResponseType(typeof(AnomalyDetectionResponseDto), (int)HttpStatusCode.OK)]
+        [ProducesResponseType((int)HttpStatusCode.BadRequest)]
+        [ProducesResponseType((int)HttpStatusCode.InternalServerError)]
+        public async Task<IActionResult> PostAnomalyDetectionAsync([FromBody] AnomalyDetectionRequestDto dto)
         {
-            if (!ModelState.IsValid)
+            if (dto == null)
             {
-                _logger.LogWarning("Invalid model state for PostAnomalyDetectionAsync.");
-                return BadRequest(ModelState);
+                return BadRequest("Anomaly detection request cannot be null.");
             }
-            _logger.LogInformation("Received anomaly detection request for model ID: {ModelId}", requestDto.ModelId ?? "Default");
 
-            var command = _mapper.Map<DetectAnomaliesCommand>(requestDto);
-            
-            // Assuming DetectAnomaliesCommand and AnomalyDetectionResult exist in the Application layer
-            // For now, let's create a placeholder for AnomalyDetectionResult
-            // var anomalyDetectionResult = await _mediator.Send(command);
-            
-            // Placeholder logic
-            await Task.Delay(100); // Simulate async work
-            var anomalyDetectionResult = new AnomalyDetectionResult // Placeholder
+            _logger.LogInformation("Received anomaly detection request for model {ModelId}", dto.ModelId);
+
+            try
             {
-                ModelIdUsed = requestDto.ModelId ?? "default_ad_model_v1",
-                Timestamp = System.DateTimeOffset.UtcNow,
-                DetectedAnomalies = new List<Application.AnomalyDetection.Models.AnomalyDetail> // Placeholder for Application.AnomalyDetection.Models.AnomalyDetail
+                var command = _mapper.Map<DetectAnomaliesCommand>(dto); // Assumes DetectAnomaliesCommand exists
+                var detectionResult = await _mediator.Send(command);
+
+                if (detectionResult == null)
                 {
-                    new Application.AnomalyDetection.Models.AnomalyDetail { Timestamp = System.DateTimeOffset.UtcNow.AddMinutes(-5), Score = 0.85, Description = "High temperature spike", SensorId = "Sensor_XYZ", Value = "105.5" },
-                    new Application.AnomalyDetection.Models.AnomalyDetail { Timestamp = System.DateTimeOffset.UtcNow.AddMinutes(-2), Score = 0.92, Description = "Unusual pressure drop", SensorId = "Sensor_ABC", Value = "10.2" }
+                     _logger.LogWarning("Anomaly detection result was null for model {ModelId}", dto.ModelId);
+                    return StatusCode((int)HttpStatusCode.InternalServerError, "Failed to get anomaly detection results.");
                 }
-            };
 
-            if (anomalyDetectionResult == null)
-            {
-                _logger.LogError("Anomaly detection result was null for model ID: {ModelId}", requestDto.ModelId ?? "Default");
-                return StatusCode(500, "An error occurred while processing anomaly detection.");
+                var responseDto = _mapper.Map<AnomalyDetectionResponseDto>(detectionResult); // Assumes AnomalyDetectionResult maps to AnomalyDetectionResponseDto
+                return Ok(responseDto);
             }
-            
-            var responseDto = _mapper.Map<AnomalyDetectionResponseDto>(anomalyDetectionResult);
-            _logger.LogInformation("Anomaly detection successful for model ID: {ModelIdUsed}, Anomalies detected: {AnomalyCount}", responseDto.ModelIdUsed, responseDto.DetectedAnomalies.Count);
-            return Ok(responseDto);
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error occurred while processing anomaly detection request for model {ModelId}", dto.ModelId);
+                return StatusCode((int)HttpStatusCode.InternalServerError, "An error occurred while processing your request.");
+            }
         }
     }
 }

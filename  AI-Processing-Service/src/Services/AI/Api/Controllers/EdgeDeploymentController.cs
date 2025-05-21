@@ -1,89 +1,69 @@
-using Microsoft.AspNetCore.Mvc;
 using AIService.Api.Dtos.EdgeDeployment;
-using AIService.Application.Interfaces; // Assuming IEdgeDeploymentAppService is here
-using System.Threading.Tasks;
-using Microsoft.Extensions.Logging;
+using AIService.Application.EdgeDeployment.Commands; // Assuming this namespace for command
 using AutoMapper;
+using MediatR;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using System;
+using System.Net;
+using System.Threading.Tasks;
 
 namespace AIService.Api.Controllers
 {
     [ApiController]
-    [Route("api/v1/edge/deployments")]
+    [Route("api/ai/[controller]")]
     public class EdgeDeploymentController : ControllerBase
     {
-        private readonly IEdgeDeploymentAppService _edgeDeploymentAppService;
-        private readonly IMapper _mapper; // IMapper might be used if requests need mapping to app service calls
+        private readonly IMediator _mediator;
+        private readonly IMapper _mapper;
         private readonly ILogger<EdgeDeploymentController> _logger;
 
-        public EdgeDeploymentController(
-            IEdgeDeploymentAppService edgeDeploymentAppService,
-            IMapper mapper,
-            ILogger<EdgeDeploymentController> logger)
+        public EdgeDeploymentController(IMediator mediator, IMapper mapper, ILogger<EdgeDeploymentController> logger)
         {
-            _edgeDeploymentAppService = edgeDeploymentAppService;
-            _mapper = mapper;
-            _logger = logger;
+            _mediator = mediator ?? throw new ArgumentNullException(nameof(mediator));
+            _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
         /// <summary>
         /// Initiates the deployment of an AI model to edge devices.
-        /// REQ-8-001: Edge AI Model Deployment
         /// </summary>
-        /// <param name="requestDto">The edge deployment request data.</param>
+        /// <param name="dto">The edge deployment request data.</param>
         /// <returns>Status of the deployment initiation.</returns>
-        [HttpPost]
-        [ProducesResponseType(202)] // Accepted for asynchronous operation
-        [ProducesResponseType(400)]
-        [ProducesResponseType(404)] // If model or devices not found
-        [ProducesResponseType(500)]
-        public async Task<IActionResult> PostDeployModelAsync([FromBody] EdgeDeploymentRequestDto requestDto)
+        /// <response code="202">If the deployment request was accepted for processing.</response>
+        /// <response code="400">If the request is invalid.</response>
+        /// <response code="500">If an internal server error occurs.</response>
+        [HttpPost("deploy")]
+        [ProducesResponseType(StatusCodes.Status202Accepted)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> PostDeployModelAsync([FromBody] EdgeDeploymentRequestDto dto)
         {
-            if (!ModelState.IsValid)
+            if (dto == null || string.IsNullOrWhiteSpace(dto.ModelId) || dto.TargetDeviceIds == null || dto.TargetDeviceIds.Count == 0)
             {
-                _logger.LogWarning("Invalid edge deployment request: {@ModelState}", ModelState.Values);
-                return BadRequest(ModelState);
+                return BadRequest("Edge deployment request is invalid. ModelId and TargetDeviceIds are required.");
             }
 
-            _logger.LogInformation("Received edge deployment request for Model ID: {ModelId}, Version: {ModelVersion} to devices: {DeviceCount}", 
-                requestDto.ModelId, requestDto.ModelVersion, requestDto.TargetDeviceIds.Count);
+            _logger.LogInformation("Received edge deployment request for model {ModelId} to devices: {DeviceIds}", dto.ModelId, string.Join(",", dto.TargetDeviceIds));
 
-            // In a real app, IEdgeDeploymentAppService.DeployModelAsync might take more structured input
-            // or the DTO itself if it aligns well with the application service method signature.
-            // For example:
-            // var deploymentId = await _edgeDeploymentAppService.DeployModelAsync(
-            //    requestDto.ModelId, 
-            //    requestDto.ModelVersion, 
-            //    requestDto.TargetDeviceIds, 
-            //    requestDto.DeploymentConfiguration);
-
-            // Placeholder for application service call
-            bool success = await _edgeDeploymentAppService.DeployModelAsync(
-                requestDto.ModelId,
-                requestDto.ModelVersion,
-                requestDto.TargetDeviceIds,
-                requestDto.DeploymentConfiguration);
-
-
-            if (!success) // Simplified success/failure. App service might return more details.
+            try
             {
-                 _logger.LogError("Failed to initiate edge deployment for Model ID: {ModelId} to devices: {DeviceCount}", 
-                    requestDto.ModelId, requestDto.TargetDeviceIds.Count);
-                // Potentially, the app service could throw specific exceptions for not found, etc.
-                return StatusCode(500, new { message = "Failed to initiate edge model deployment." });
-            }
-            
-            _logger.LogInformation("Edge deployment initiated successfully for Model ID: {ModelId} to devices: {DeviceCount}", 
-                requestDto.ModelId, requestDto.TargetDeviceIds.Count);
+                // The SDS implies an IEdgeDeploymentAppService.
+                // For consistency with other controllers, using MediatR.
+                // The handler for DeployModelToEdgeCommand would then use IEdgeDeploymentAppService.
+                var command = _mapper.Map<DeployModelToEdgeCommand>(dto); // Assumes DeployModelToEdgeCommand exists
 
-            // Return an ID for tracking the deployment status if available
-            return Accepted(new { message = "Edge model deployment initiated.", deploymentId = System.Guid.NewGuid().ToString() });
+                // Assuming the command handler returns a deployment ID or task ID
+                var deploymentInitiationResult = await _mediator.Send(command); 
+
+                _logger.LogInformation("Edge deployment for model {ModelId} initiated successfully. Task/Deployment ID: {DeploymentId}", dto.ModelId, deploymentInitiationResult);
+                return Accepted(deploymentInitiationResult); // Return some identifier for the deployment task
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error occurred while initiating edge deployment for model {ModelId}", dto.ModelId);
+                return StatusCode((int)HttpStatusCode.InternalServerError, "An error occurred while processing your request.");
+            }
         }
-
-        // Potentially add a GET endpoint to check deployment status
-        // [HttpGet("{deploymentId}/status")]
-        // public async Task<IActionResult> GetDeploymentStatusAsync(string deploymentId)
-        // {
-        //     // ...
-        // }
     }
 }
