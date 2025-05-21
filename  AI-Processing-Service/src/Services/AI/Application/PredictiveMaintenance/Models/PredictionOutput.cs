@@ -3,36 +3,38 @@ using System.Collections.Generic;
 namespace AIService.Application.PredictiveMaintenance.Models
 {
     /// <summary>
-    /// Represents the result of a prediction operation at the application layer,
-    /// to be mapped to a DTO for API response.
-    /// REQ-7-001: Predictive Maintenance Analysis
+    /// Represents the result of a prediction operation at the application layer.
+    /// This model is typically mapped to a DTO for API responses.
+    /// REQ-7-001: Output for predictive maintenance analysis.
     /// </summary>
     public class PredictionOutput
     {
         /// <summary>
-        /// Indicates whether the prediction was successful.
+        /// A dictionary containing the prediction results. 
+        /// Keys are output names (e.g., "RemainingUsefulLife", "FailureProbability"), 
+        /// and values are the predicted values.
         /// </summary>
-        public bool Success { get; set; }
+        public Dictionary<string, object> Predictions { get; set; }
 
         /// <summary>
-        /// The raw output from the model. Keys are output names, values are the results.
-        /// This allows for flexibility with different model output structures.
+        /// Optional: Overall confidence score of the prediction, if applicable.
         /// </summary>
-        public Dictionary<string, object> Outputs { get; set; }
+        public double? ConfidenceScore { get; set; }
 
         /// <summary>
-        /// Error message if the prediction was not successful.
+        /// Optional: Identifier of the model version that produced this prediction.
         /// </summary>
-        public string ErrorMessage { get; set; }
+        public string? ModelVersionUsed { get; set; }
 
-        // Example of specific properties if models have common outputs:
-        // public double? RemainingUsefulLife { get; set; }
-        // public double? ProbabilityOfFailure { get; set; }
-        // public string SuggestedActions { get; set; }
+        /// <summary>
+        /// Optional: Any additional metadata or explanation related to the prediction.
+        /// </summary>
+        public Dictionary<string, string>? Metadata { get; set; }
 
         public PredictionOutput()
         {
-            Outputs = new Dictionary<string, object>();
+            Predictions = new Dictionary<string, object>();
+            Metadata = new Dictionary<string, string>();
         }
     }
 }

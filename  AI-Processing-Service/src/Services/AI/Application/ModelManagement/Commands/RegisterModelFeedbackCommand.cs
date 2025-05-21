@@ -1,77 +1,89 @@
-using MediatR;
+using MediatR; // Not strictly a MediatR command if handled directly by AppService, but good for consistency if it were.
 using System.Collections.Generic;
+using System;
+using AIService.Application.ModelManagement.Models.Results; // For ModelOperationResult
 
 namespace AIService.Application.ModelManagement.Commands
 {
     /// <summary>
-    /// Encapsulates user feedback (validation, correction) for a specific model prediction,
-    /// to be processed by the ModelManagementAppService.
-    /// REQ-7-005: Model Feedback Loop
-    /// REQ-7-011: Anomaly Labeling (can be a form of feedback)
+    /// Encapsulates user feedback for a specific model prediction.
+    /// This can be used for model monitoring, retraining data collection, and improving model performance.
+    /// REQ-7-005: Model Feedback Loop.
+    /// REQ-7-011: Anomaly Labeling (a form of feedback).
     /// </summary>
-    public class RegisterModelFeedbackCommand : IRequest<Unit> // Unit if no specific result, or a FeedbackAcknowledgement
+    public class RegisterModelFeedbackCommand // : IRequest<ModelOperationResult> // If handled by MediatR handler
     {
         /// <summary>
-        /// Identifier of the model for which feedback is provided.
+        /// The unique identifier of the model for which feedback is being provided.
         /// </summary>
         public string ModelId { get; set; }
 
         /// <summary>
-        /// Version of the model.
+        /// The version of the model used for the prediction.
         /// </summary>
         public string ModelVersion { get; set; }
 
         /// <summary>
-        /// Optional unique identifier for the specific prediction instance, if available.
+        /// Optional: A unique identifier for the specific prediction instance, if available.
         /// </summary>
-        public string PredictionId { get; set; }
+        public string? PredictionId { get; set; }
 
         /// <summary>
-        /// A snapshot of the input data that led to the prediction.
-        /// Could be a JSON string or a dictionary.
+        /// The input features that led to the prediction.
         /// </summary>
-        public Dictionary<string, object> InputDataSnapshot { get; set; }
+        public Dictionary<string, object> InputFeatures { get; set; }
 
         /// <summary>
-        /// The original output/prediction from the model.
-        /// Could be a JSON string or a dictionary.
+        /// The original output/prediction provided by the model.
         /// </summary>
-        public Dictionary<string, object> OriginalOutput { get; set; }
+        public Dictionary<string, object> ModelOutput { get; set; }
 
         /// <summary>
-        /// Type of feedback (e.g., "Correct", "Incorrect", "Misclassified", "FalsePositive", "FalseNegative", "CorrectedLabel").
+        /// The actual/correct output or label provided by the user or an oracle.
         /// </summary>
-        public string FeedbackType { get; set; }
+        public Dictionary<string, object> ActualOutput { get; set; }
 
         /// <summary>
-        /// If feedback involves correction, this holds the corrected output/label.
-        /// Could be a JSON string or a dictionary.
+        /// Optional: A flag indicating if the user considers the model's prediction correct.
+        /// If null, correctness might be inferred from comparison of ModelOutput and ActualOutput.
         /// </summary>
-        public Dictionary<string, object> CorrectedOutput { get; set; }
+        public bool? IsCorrect { get; set; }
 
         /// <summary>
-        /// Additional textual comments from the user.
+        /// Optional: Any textual comments or annotations from the user.
         /// </summary>
-        public string Comments { get; set; }
+        public string? UserComments { get; set; }
 
         /// <summary>
-        /// Identifier of the user providing the feedback.
+        /// Optional: Timestamp when the feedback was provided by the user. 
+        /// If null, will be set to current time upon processing.
         /// </summary>
-        public string UserId { get; set; }
+        public DateTimeOffset? UserFeedbackTimestamp { get; set; }
 
-        public RegisterModelFeedbackCommand()
+        /// <summary>
+        /// Optional: Identifier of the user providing the feedback.
+        /// </summary>
+        public string? UserId { get; set; }
+
+        /// <summary>
+        /// Optional: Additional metadata related to the feedback.
+        /// </summary>
+        public Dictionary<string, string>? Metadata { get; set; }
+
+
+        public RegisterModelFeedbackCommand(
+            string modelId,
+            string modelVersion,
+            Dictionary<string, object> inputFeatures,
+            Dictionary<string, object> modelOutput,
+            Dictionary<string, object> actualOutput)
         {
-            InputDataSnapshot = new Dictionary<string, object>();
-            OriginalOutput = new Dictionary<string, object>();
-            CorrectedOutput = new Dictionary<string, object>();
+            ModelId = modelId ?? throw new ArgumentNullException(nameof(modelId));
+            ModelVersion = modelVersion ?? throw new ArgumentNullException(nameof(modelVersion));
+            InputFeatures = inputFeatures ?? throw new ArgumentNullException(nameof(inputFeatures));
+            ModelOutput = modelOutput ?? throw new ArgumentNullException(nameof(modelOutput));
+            ActualOutput = actualOutput ?? throw new ArgumentNullException(nameof(actualOutput));
+            Metadata = new Dictionary<string, string>();
         }
     }
-
-    // Example for acknowledgement, if needed
-    // public class FeedbackAcknowledgement
-    // {
-    //     public bool Success { get; set; }
-    //     public string Message { get; set; }
-    //     public string FeedbackId { get; set; } // If feedback is stored and gets an ID
-    // }
 }

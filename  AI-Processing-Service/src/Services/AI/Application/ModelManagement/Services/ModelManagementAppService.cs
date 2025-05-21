@@ -1,172 +1,231 @@
-using AIService.Application.ModelManagement.Commands;
 using AIService.Application.ModelManagement.Interfaces;
-using AIService.Domain.Enums;
+using AIService.Application.ModelManagement.Commands;
+using AIService.Application.ModelManagement.Models.Results;
 using AIService.Domain.Interfaces;
 using AIService.Domain.Models;
-using AIService.Infrastructure.AI.Common; // For ModelFileLoader (if used directly)
-using AIService.Infrastructure.Clients; // For DataServiceClient (if used directly)
+using AIService.Domain.Enums;
+using AutoMapper;
 using Microsoft.Extensions.Logging;
 using System;
-using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace AIService.Application.ModelManagement.Services
 {
     /// <summary>
-    /// Orchestrates model management operations by interacting with domain services
-    /// (ModelLifecycleManager - conceptual, not explicitly listed, usually MLOps client and ModelRepository),
+    /// Orchestrates model management operations by interacting with domain services,
     /// MLOps clients, and repositories.
-    /// REQ-7-004: MLOps Integration
-    /// REQ-7-005: Model Feedback Loop
-    /// REQ-7-010: AI Model Performance Monitoring
-    /// REQ-7-006: Central AI Model Storage (via IModelRepository and ModelFileLoader/DataServiceClient)
-    /// REQ-DLP-024: Store AI Model Artifacts
+    /// REQ-7-004: MLOps Integration.
+    /// REQ-7-005: Model Feedback Loop.
+    /// REQ-7-010: AI Model Performance Monitoring.
     /// </summary>
     public class ModelManagementAppService : IModelManagementAppService
     {
         private readonly IModelRepository _modelRepository;
         private readonly IMlLopsClient _mlOpsClient;
+        private readonly IMapper _mapper;
         private readonly ILogger<ModelManagementAppService> _logger;
-        private readonly IModelFileLoader _modelFileLoader; // Handles artifact storage interaction
 
         public ModelManagementAppService(
             IModelRepository modelRepository,
             IMlLopsClient mlOpsClient,
-            IModelFileLoader modelFileLoader,
+            IMapper mapper,
             ILogger<ModelManagementAppService> logger)
         {
             _modelRepository = modelRepository ?? throw new ArgumentNullException(nameof(modelRepository));
             _mlOpsClient = mlOpsClient ?? throw new ArgumentNullException(nameof(mlOpsClient));
-            _modelFileLoader = modelFileLoader ?? throw new ArgumentNullException(nameof(modelFileLoader));
+            _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public async Task<string> UploadAndRegisterModelAsync(
-            Stream modelArtifactStream,
-            string originalFileName,
+        public async Task<ModelUploadResult> UploadModelAsync(
             string modelName,
-            string version,
-            string description,
-            ModelType modelType,
-            ModelFormat modelFormat,
-            string inputSchemaJson,
-            string outputSchemaJson,
-            Dictionary<string, string> tags)
+            string modelVersion,
+            string modelTypeString,
+            string modelFormatString,
+            Stream modelFileStream,
+            string? description,
+            string? inputSchema,
+            string? outputSchema,
+            Dictionary<string, string>? tags,
+            CancellationToken cancellationToken = default)
         {
-            _logger.LogInformation("Starting upload and registration for model: {ModelName}, Version: {Version}", modelName, version);
+            _logger.LogInformation("Attempting to upload model: {ModelName}, Version: {ModelVersion}", modelName, modelVersion);
 
-            // 1. Store model artifact (REQ-7-006, REQ-DLP-024)
-            // The ModelFileLoader should use DataServiceClient internally or similar mechanism.
-            // It returns a storage reference (e.g., path, URI, blob ID).
-            string storageReference = await _modelFileLoader.SaveModelFileAsync(modelArtifactStream, originalFileName, modelName, version);
-            _logger.LogInformation("Model artifact stored. Reference: {StorageReference}", storageReference);
+            if (!Enum.TryParse<ModelType>(modelTypeString, true, out var modelType))
+            {
+                _logger.LogError("Invalid model type provided: {ModelTypeString}", modelTypeString);
+                return new ModelUploadResult { Success = false, Message = $"Invalid model type: {modelTypeString}" };
+            }
 
-            // 2. Create AiModel domain entity
+            if (!Enum.TryParse<ModelFormat>(modelFormatString, true, out var modelFormat))
+            {
+                _logger.LogError("Invalid model format provided: {ModelFormatString}", modelFormatString);
+                return new ModelUploadResult { Success = false, Message = $"Invalid model format: {modelFormatString}" };
+            }
+
             var aiModel = new AiModel
             {
-                Id = Guid.NewGuid().ToString(), // Or generate based on name/version, or let MLOps generate
+                // Id might be generated by the repository or MLOps client upon registration.
+                // For now, let's assume repository might assign it or we generate one.
+                Id = Guid.NewGuid().ToString(), // Or let repository handle ID generation
                 Name = modelName,
-                Version = version,
-                Description = description,
+                Version = modelVersion,
                 ModelType = modelType,
                 ModelFormat = modelFormat,
-                StorageReference = storageReference,
-                InputSchema = inputSchemaJson,
-                OutputSchema = outputSchemaJson,
-                Status = "Registered", // Initial status
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
+                Description = description,
+                InputSchema = inputSchema,
+                OutputSchema = outputSchema,
+                Status = AiModelStatus.Registered, // Initial status
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
                 Tags = tags ?? new Dictionary<string, string>()
+                // StorageReference will be set after storing the artifact
             };
 
-            // 3. Save AiModel metadata (REQ-7-006)
-            await _modelRepository.SaveModelAsync(aiModel);
-            _logger.LogInformation("AiModel metadata saved for Id: {ModelId}", aiModel.Id);
-
-            // 4. Register with MLOps platform (REQ-7-004)
-            // The MLOps client might need the artifact stream again or just the storage reference.
-            // For simplicity, let's assume it can use the AiModel entity which includes the storage reference.
-            // Some MLOps platforms handle versioning themselves.
-            // Reset stream position if it was read.
-            modelArtifactStream.Position = 0; 
-            await _mlOpsClient.RegisterModelAsync(aiModel, modelArtifactStream); // Pass stream if MLOps needs to upload
-            _logger.LogInformation("Model registered with MLOps platform for Id: {ModelId}", aiModel.Id);
-            
-            return aiModel.Id;
-        }
-
-        public async Task ProcessModelFeedbackAsync(RegisterModelFeedbackCommand feedbackCommand)
-        {
-            _logger.LogInformation("Processing model feedback for ModelId: {ModelId}, PredictionId: {PredictionId}",
-                feedbackCommand.ModelId, feedbackCommand.PredictionId);
-            
-            // Convert command to a domain feedback object if necessary
-            var feedback = new ModelFeedback
+            try
             {
-                ModelId = feedbackCommand.ModelId,
-                ModelVersion = feedbackCommand.ModelVersion,
-                PredictionId = feedbackCommand.PredictionId,
-                InputDataSnapshot = feedbackCommand.InputDataSnapshot,
-                OriginalOutput = feedbackCommand.OriginalOutput,
-                FeedbackType = feedbackCommand.FeedbackType,
-                CorrectedOutput = feedbackCommand.CorrectedOutput,
-                Comments = feedbackCommand.Comments,
-                UserId = feedbackCommand.UserId,
-                Timestamp = DateTime.UtcNow
-            };
+                // 1. Store model artifact (e.g., to blob storage via IModelRepository or DataServiceClient)
+                // The IModelRepository should handle the actual storage mechanism.
+                var storageReference = await _modelRepository.SaveModelArtifactAsync(aiModel.Id, aiModel.Version, modelFileStream, cancellationToken);
+                aiModel.StorageReference = storageReference;
 
-            // Store feedback locally (optional, depends on requirements)
-            // await _feedbackRepository.SaveAsync(feedback); 
-            // _logger.LogInformation("Feedback stored locally.");
+                // 2. Save model metadata
+                await _modelRepository.SaveModelAsync(aiModel, cancellationToken);
+                _logger.LogInformation("Model metadata saved for {ModelName} - {ModelVersion}. ID: {ModelId}", aiModel.Name, aiModel.Version, aiModel.Id);
 
-            // Log feedback to MLOps platform (REQ-7-005, REQ-7-011)
-            await _mlOpsClient.LogPredictionFeedbackAsync(feedback);
-            _logger.LogInformation("Feedback logged to MLOps platform for ModelId: {ModelId}", feedbackCommand.ModelId);
-        }
-
-        public async Task<object> GetModelStatusAsync(string modelId, string version)
-        {
-            _logger.LogInformation("Getting status for model Id: {ModelId}, Version: {Version}", modelId, version);
-            // This could involve querying MLOps platform or local repository
-            var status = await _mlOpsClient.GetModelDeploymentStatusAsync(modelId, version, "production"); // Example environment
-            // Or query AiModel from _modelRepository and return its status
-            // var aiModel = await _modelRepository.GetModelAsync(modelId, version);
-            // return aiModel?.Status; // This is a simplification.
-            _logger.LogInformation("Retrieved status for model Id: {ModelId}: {@Status}", modelId, status);
-            return status; // TODO: Map to a defined DTO
-        }
-
-        public async Task InitiateRetrainingWorkflowAsync(string modelId, string version, Dictionary<string, object> retrainingParams)
-        {
-            _logger.LogInformation("Initiating retraining workflow for model Id: {ModelId}, Version: {Version}", modelId, version);
-            // This would trigger a pipeline or job in the MLOps platform
-            await _mlOpsClient.TriggerRetrainingWorkflowAsync(modelId, version, retrainingParams);
-            _logger.LogInformation("Retraining workflow initiated for model Id: {ModelId}", modelId);
-        }
-
-        public async Task<IEnumerable<object>> ListModelsAsync()
-        {
-            _logger.LogInformation("Listing all models.");
-            // This would typically fetch from _modelRepository or _mlOpsClient
-            var models = await _modelRepository.GetAllModelsAsync(); // Assuming this method exists
-            // TODO: Map to DTOs
-            _logger.LogInformation("Retrieved {Count} models.", models.Count());
-            return models;
-        }
-
-        public async Task<object> GetModelDetailsAsync(string modelId, string version)
-        {
-            _logger.LogInformation("Getting details for model Id: {ModelId}, Version: {Version}", modelId, version);
-            var model = await _modelRepository.GetModelAsync(modelId, version);
-            // TODO: Map to a detailed DTO, potentially enrich with MLOps info
-            if (model == null)
-            {
-                _logger.LogWarning("Model not found: Id {ModelId}, Version {Version}", modelId, version);
-                return null;
+                // 3. Register with MLOps platform (if applicable)
+                // The MLOps client might need the stream again or the storage reference.
+                // Reset stream position if it was read.
+                if (modelFileStream.CanSeek) modelFileStream.Position = 0;
+                await _mlOpsClient.RegisterModelAsync(aiModel, modelFileStream, cancellationToken); // Assuming MLOps client can take stream or path from StorageReference
+                _logger.LogInformation("Model {ModelName} - {ModelVersion} registered with MLOps platform.", aiModel.Name, aiModel.Version);
+                
+                return new ModelUploadResult { Success = true, Message = "Model uploaded successfully.", ModelId = aiModel.Id, Version = aiModel.Version };
             }
-            _logger.LogInformation("Retrieved details for model Id: {ModelId}", modelId);
-            return model;
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to upload model {ModelName} - {ModelVersion}", modelName, modelVersion);
+                return new ModelUploadResult { Success = false, Message = $"Failed to upload model: {ex.Message}" };
+            }
+        }
+
+        public async Task<ModelOperationResult> RegisterFeedbackAsync(RegisterModelFeedbackCommand feedbackCommand, CancellationToken cancellationToken = default)
+        {
+            _logger.LogInformation("Registering feedback for ModelId: {ModelId}", feedbackCommand.ModelId);
+            try
+            {
+                var modelFeedback = _mapper.Map<ModelFeedback>(feedbackCommand);
+                modelFeedback.FeedbackTimestamp = DateTimeOffset.UtcNow;
+
+                // Log feedback to MLOps platform
+                await _mlOpsClient.LogPredictionFeedbackAsync(modelFeedback, cancellationToken);
+
+                // Optionally, store feedback in local persistence as well if required by REQ-7-005 (Data Service interaction)
+                // This might involve calling a method on _modelRepository, e.g., _modelRepository.SaveFeedbackAsync(modelFeedback, cancellationToken);
+                // For now, focusing on MLOps client as per primary interpretation of REQ-7-005.
+
+                _logger.LogInformation("Feedback registered successfully for ModelId: {ModelId}", feedbackCommand.ModelId);
+                return new ModelOperationResult { Success = true, Message = "Feedback registered successfully." };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to register feedback for ModelId: {ModelId}", feedbackCommand.ModelId);
+                return new ModelOperationResult { Success = false, Message = $"Failed to register feedback: {ex.Message}" };
+            }
+        }
+
+        public async Task<ModelStatusInfo> GetModelStatusAsync(string modelId, string? modelVersion = null, CancellationToken cancellationToken = default)
+        {
+            _logger.LogInformation("Getting status for ModelId: {ModelId}, Version: {ModelVersion}", modelId, modelVersion ?? "N/A");
+            try
+            {
+                // Attempt to get status from MLOps platform first
+                var mlOpsStatus = await _mlOpsClient.GetModelDeploymentStatusAsync(modelId, modelVersion, "production", cancellationToken); // Assuming "production" environment or similar concept
+
+                // Fallback or augment with local repository status
+                var localModel = await _modelRepository.GetModelAsync(modelId, modelVersion, cancellationToken);
+
+                if (mlOpsStatus == null && localModel == null)
+                {
+                     _logger.LogWarning("Model not found: {ModelId}, Version: {ModelVersion}", modelId, modelVersion ?? "N/A");
+                    return new ModelStatusInfo { Success = false, Message = "Model not found." };
+                }
+                
+                // Combine information - MLOps status might be more about deployment, local about registration/metadata
+                var statusInfo = _mapper.Map<ModelStatusInfo>(localModel); // Assumes AiModel can be mapped to ModelStatusInfo
+                if (statusInfo == null) statusInfo = new ModelStatusInfo();
+
+                statusInfo.Success = true;
+                statusInfo.ModelId = modelId;
+                statusInfo.Version = localModel?.Version ?? modelVersion ?? mlOpsStatus?.Version ?? "Unknown";
+                statusInfo.CurrentStatus = mlOpsStatus?.Status ?? localModel?.Status.ToString() ?? "Unknown";
+                statusInfo.AdditionalInfo.Add("MLOpsEnvironment", mlOpsStatus?.Environment ?? "N/A");
+                statusInfo.AdditionalInfo.Add("MLOpsStatusDetails", mlOpsStatus?.Details ?? "N/A");
+                statusInfo.LastChecked = DateTimeOffset.UtcNow;
+
+
+                return statusInfo;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to get status for ModelId: {ModelId}", modelId);
+                return new ModelStatusInfo { Success = false, Message = $"Failed to get model status: {ex.Message}" };
+            }
+        }
+        
+        public async Task<IEnumerable<ModelMetadataResult>> ListModelsAsync(string? filterByName = null, string? filterByType = null, CancellationToken cancellationToken = default)
+        {
+            _logger.LogInformation("Listing models with filters - Name: {FilterByName}, Type: {FilterByType}", filterByName, filterByType);
+            try
+            {
+                ModelType? modelTypeEnum = null;
+                if (!string.IsNullOrEmpty(filterByType) && Enum.TryParse<ModelType>(filterByType, true, out var parsedType))
+                {
+                    modelTypeEnum = parsedType;
+                }
+
+                var models = await _modelRepository.ListModelsAsync(filterByName, modelTypeEnum, cancellationToken);
+                return _mapper.Map<IEnumerable<ModelMetadataResult>>(models);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to list models.");
+                // Return empty list or throw, depending on desired error handling for lists
+                return Enumerable.Empty<ModelMetadataResult>();
+            }
+        }
+
+        public async Task<RetrainingInitiationResult> InitiateRetrainingWorkflowAsync(string modelId, Dictionary<string, object> retrainingParameters, CancellationToken cancellationToken = default)
+        {
+            _logger.LogInformation("Initiating retraining workflow for ModelId: {ModelId}", modelId);
+            try
+            {
+                // Ensure model exists
+                var model = await _modelRepository.GetModelAsync(modelId, null, cancellationToken); // Get latest version or specific if logic allows
+                if (model == null)
+                {
+                    _logger.LogWarning("Cannot initiate retraining. Model not found: {ModelId}", modelId);
+                    return new RetrainingInitiationResult { Success = false, Message = $"Model with ID {modelId} not found." };
+                }
+
+                var workflowDetails = await _mlOpsClient.TriggerRetrainingWorkflowAsync(modelId, model.Version, retrainingParameters, cancellationToken);
+                
+                _logger.LogInformation("Retraining workflow initiated for ModelId: {ModelId}. WorkflowId: {WorkflowId}", modelId, workflowDetails?.WorkflowId ?? "N/A");
+                return new RetrainingInitiationResult { 
+                    Success = workflowDetails?.Success ?? false, 
+                    Message = workflowDetails?.Message ?? "Retraining initiation status unknown.",
+                    WorkflowId = workflowDetails?.WorkflowId 
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to initiate retraining workflow for ModelId: {ModelId}", modelId);
+                return new RetrainingInitiationResult { Success = false, Message = $"Failed to initiate retraining: {ex.Message}" };
+            }
         }
     }
 }

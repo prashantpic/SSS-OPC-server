@@ -1,97 +1,140 @@
 using MediatR;
-using AutoMapper;
-using Microsoft.Extensions.Logging;
 using AIService.Application.AnomalyDetection.Commands;
+using AIService.Application.AnomalyDetection.Models;
 using AIService.Domain.Interfaces;
 using AIService.Domain.Models;
+using AutoMapper;
+using Microsoft.Extensions.Logging;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Collections.Generic; // For List
 
 namespace AIService.Application.AnomalyDetection.Handlers
 {
     /// <summary>
-    /// Processes the DetectAnomaliesCommand, executes the relevant anomaly detection model,
-    /// and returns results.
-    /// REQ-7-008: Anomaly Detection
+    /// Processes the DetectAnomaliesCommand, executes the relevant anomaly detection model
+    /// via ModelExecutionService, and returns the detected anomalies.
+    /// REQ-7-008: Core functionality for anomaly detection.
     /// </summary>
-    public class DetectAnomaliesCommandHandler : IRequestHandler<DetectAnomaliesCommand, DetectAnomaliesCommandResult>
+    public class DetectAnomaliesCommandHandler : IRequestHandler<DetectAnomaliesCommand, IEnumerable<AnomalyDetails>>
     {
         private readonly IModelExecutionService _modelExecutionService;
-        private readonly IModelRepository _modelRepository;
         private readonly IMapper _mapper;
         private readonly ILogger<DetectAnomaliesCommandHandler> _logger;
 
         public DetectAnomaliesCommandHandler(
             IModelExecutionService modelExecutionService,
-            IModelRepository modelRepository,
             IMapper mapper,
             ILogger<DetectAnomaliesCommandHandler> logger)
         {
             _modelExecutionService = modelExecutionService ?? throw new ArgumentNullException(nameof(modelExecutionService));
-            _modelRepository = modelRepository ?? throw new ArgumentNullException(nameof(modelRepository));
             _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public async Task<DetectAnomaliesCommandResult> Handle(DetectAnomaliesCommand request, CancellationToken cancellationToken)
+        public async Task<IEnumerable<AnomalyDetails>> Handle(DetectAnomaliesCommand request, CancellationToken cancellationToken)
         {
-            _logger.LogInformation("Handling DetectAnomaliesCommand for ModelId: {ModelId}, Version: {ModelVersion}", request.ModelId, request.ModelVersion);
+            _logger.LogInformation("Handling DetectAnomaliesCommand for ModelId: {ModelId}, Version: {ModelVersion}, DataPoints Count: {DataPointsCount}",
+                request.ModelId, request.ModelVersion ?? "Latest", request.DataPoints.Count);
 
             try
             {
-                var modelInput = _mapper.Map<ModelInput>(request.InputData);
-                 if (modelInput == null)
-                {
-                    _logger.LogError("Failed to map InputData to ModelInput for Anomaly Detection ModelId: {ModelId}", request.ModelId);
-                    return new DetectAnomaliesCommandResult { Success = false, ErrorMessage = "Invalid input data format." };
-                }
-
-                var modelOutput = await _modelExecutionService.ExecuteModelAsync(request.ModelId, request.ModelVersion, modelInput);
-
-                if (modelOutput == null || modelOutput.Outputs == null)
-                {
-                    _logger.LogWarning("Anomaly detection model execution for ModelId {ModelId} returned null or empty output.", request.ModelId);
-                    return new DetectAnomaliesCommandResult { Success = false, ErrorMessage = "Model execution failed or returned no output." };
-                }
+                // Anomaly detection models might take a single complex input or a batch.
+                // This example assumes the model can process a list of data points, 
+                // or ModelExecutionService handles batching if the underlying model takes one instance at a time.
+                // For simplicity, we'll assume ModelInput can represent a batch or sequence if needed.
+                // Mapping from List<Dictionary<string, object>> to Domain.ModelInput needs to be defined.
                 
-                // The mapping from raw modelOutput.Outputs to DetectAnomaliesCommandResult.Anomalies
-                // will be model-specific and should be handled carefully.
-                // This might involve interpreting scores, labels, etc.
-                // For now, a direct mapping or a simplified interpretation is assumed.
-                var result = _mapper.Map<DetectAnomaliesCommandResult>(modelOutput); // AutoMapper profile needs to handle this
-                result.Success = true;
-                result.RawOutput = modelOutput.Outputs; // Preserve raw output if needed
+                // If model expects one input for all data points:
+                var featuresForModel = new Dictionary<string, object> { { "datapoints_sequence", request.DataPoints } };
+                var modelInput = _mapper.Map<ModelInput>(featuresForModel); // This mapping needs to be smart
+                
+                ModelOutput modelOutput = await _modelExecutionService.ExecuteModelAsync(request.ModelId, modelInput, request.ModelVersion, cancellationToken);
 
-                // Example: Post-process modelOutput.Outputs to populate result.Anomalies
-                // This is highly dependent on the specific AD model's output structure.
-                // if (modelOutput.Outputs.TryGetValue("is_anomaly", out var isAnomalyObj) && isAnomalyObj is bool isAnomaly && isAnomaly)
-                // {
-                //     var anomaly = new DetectedAnomaly
-                //     {
-                //         AnomalyType = modelOutput.Outputs.TryGetValue("anomaly_type", out var type) ? type.ToString() : "Generic",
-                //         SeverityScore = modelOutput.Outputs.TryGetValue("anomaly_score", out var score) && score is double dScore ? dScore : 0.0,
-                //         Description = "Anomaly detected based on model output.",
-                //         Timestamp = DateTime.UtcNow // Or from input data if available
-                //     };
-                //     // Populate ContributingFactors if model provides them
-                //     result.Anomalies.Add(anomaly);
-                // }
-
-
-                _logger.LogInformation("Successfully processed DetectAnomaliesCommand for ModelId: {ModelId}", request.ModelId);
-                return result;
+                // The ModelOutput for anomaly detection needs to be parsed into AnomalyDetails.
+                // This parsing logic could be complex and model-specific.
+                // For example, modelOutput.Results might contain a list of booleans, scores, etc.
+                var anomalyResults = ParseAnomalyDetectionOutput(modelOutput, request.DataPoints, modelOutput.ModelVersionUsed);
+                
+                _logger.LogInformation("Successfully processed DetectAnomaliesCommand for ModelId: {ModelId}. Found {AnomalyCount} anomalies.", request.ModelId, anomalyResults.Count(a => a.IsAnomaly));
+                return anomalyResults;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error occurred while handling DetectAnomaliesCommand for ModelId: {ModelId}", request.ModelId);
-                return new DetectAnomaliesCommandResult
-                {
-                    Success = false,
-                    ErrorMessage = $"An error occurred: {ex.Message}"
-                };
+                throw;
             }
+        }
+
+        private IEnumerable<AnomalyDetails> ParseAnomalyDetectionOutput(ModelOutput modelOutput, List<Dictionary<string, object>> originalDataPoints, string? modelVersionUsed)
+        {
+            // This is a placeholder. Actual parsing depends heavily on the model's output structure.
+            // Example: modelOutput.Results could be a list of dictionaries, or a dictionary with lists.
+            // Let's assume modelOutput.Results["anomalies"] is a list of booleans
+            // and modelOutput.Results["scores"] is a list of doubles, corresponding to originalDataPoints.
+
+            var results = new List<AnomalyDetails>();
+            
+            if (modelOutput.Results.TryGetValue("IsAnomaly", out object? isAnomalyObj) && 
+                isAnomalyObj is IList<bool> isAnomalyList && 
+                isAnomalyList.Count == originalDataPoints.Count)
+            {
+                IList<double>? scoresList = null;
+                if (modelOutput.Results.TryGetValue("AnomalyScore", out object? scoresObj) && scoresObj is IList<double> sList)
+                {
+                    scoresList = sList;
+                }
+
+                IList<string>? explanationsList = null;
+                 if (modelOutput.Results.TryGetValue("Explanation", out object? explanationsObj) && explanationsObj is IList<string> eList)
+                {
+                    explanationsList = eList;
+                }
+
+
+                for (int i = 0; i < originalDataPoints.Count; i++)
+                {
+                    results.Add(new AnomalyDetails
+                    {
+                        DataPoint = originalDataPoints[i],
+                        IsAnomaly = isAnomalyList[i],
+                        AnomalyScore = (scoresList != null && scoresList.Count == originalDataPoints.Count) ? scoresList[i] : (double?)null,
+                        Explanation = (explanationsList != null && explanationsList.Count == originalDataPoints.Count) ? explanationsList[i] : null,
+                        ModelVersionUsed = modelVersionUsed
+                    });
+                }
+            }
+            else
+            {
+                 // Fallback or simpler interpretation if structured output is not available
+                 // This might indicate a single anomaly result for the entire batch
+                bool overallAnomaly = false;
+                if(modelOutput.Results.TryGetValue("IsAnomaly", out var singleAnomalyFlag) && singleAnomalyFlag is bool flag) {
+                    overallAnomaly = flag;
+                }
+                double? overallScore = null;
+                if(modelOutput.Results.TryGetValue("AnomalyScore", out var singleScore) && singleScore is double scoreVal) {
+                    overallScore = scoreVal;
+                }
+                // In such a case, might return one AnomalyDetails for the whole batch or apply to all
+                // For this example, let's log a warning and return empty or a generic result.
+                _logger.LogWarning("Could not parse anomaly detection output as expected list. ModelOutput: {@ModelOutput}", modelOutput);
+                // Create a single result if that's the expectation for some models
+                if (originalDataPoints.Count == 1) // Or if model output implies single result for single input
+                {
+                     results.Add(new AnomalyDetails
+                    {
+                        DataPoint = originalDataPoints.FirstOrDefault(),
+                        IsAnomaly = overallAnomaly,
+                        AnomalyScore = overallScore,
+                        ModelVersionUsed = modelVersionUsed,
+                        Explanation = modelOutput.Results.TryGetValue("Explanation", out var exp) && exp is string s ? s : null
+                    });
+                }
+            }
+            return results;
         }
     }
 }

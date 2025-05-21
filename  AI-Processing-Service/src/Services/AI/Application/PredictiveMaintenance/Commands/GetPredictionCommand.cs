@@ -5,37 +5,34 @@ using System.Collections.Generic;
 namespace AIService.Application.PredictiveMaintenance.Commands
 {
     /// <summary>
-    /// Represents a request to generate a maintenance prediction, encapsulating necessary input data.
-    /// Used in CQRS pattern.
-    /// REQ-7-001: Predictive Maintenance Analysis
-    /// REQ-7-002: Input data requirements for models
+    /// Represents a request to generate a maintenance prediction.
+    /// Encapsulates necessary input data for the model.
+    /// REQ-7-001: Core functionality for predictive maintenance.
+    /// REQ-7-002: Input data requirements for models.
     /// </summary>
     public class GetPredictionCommand : IRequest<PredictionOutput>
     {
         /// <summary>
         /// The unique identifier of the AI model to be used for prediction.
-        /// If null or empty, a default model might be used.
         /// </summary>
         public string ModelId { get; set; }
 
         /// <summary>
-        /// The specific version of the model to use.
-        /// If null or empty, the latest or default version might be used.
+        /// The version of the AI model. If null, the latest active version might be used.
         /// </summary>
-        public string ModelVersion { get; set; }
+        public string? ModelVersion { get; set; }
 
         /// <summary>
-        /// Input data for the prediction model.
+        /// A dictionary representing the input features for the prediction model.
         /// Keys are feature names, and values are the feature values.
-        /// This structure should align with the model's InputSchema.
         /// </summary>
-        public Dictionary<string, object> InputData { get; set; }
+        public Dictionary<string, object> Features { get; set; }
 
-        public GetPredictionCommand(string modelId, string modelVersion, Dictionary<string, object> inputData)
+        public GetPredictionCommand(string modelId, Dictionary<string, object> features, string? modelVersion = null)
         {
-            ModelId = modelId;
+            ModelId = modelId ?? throw new ArgumentNullException(nameof(modelId));
+            Features = features ?? throw new ArgumentNullException(nameof(features));
             ModelVersion = modelVersion;
-            InputData = inputData ?? new Dictionary<string, object>();
         }
     }
 }

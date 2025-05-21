@@ -1,80 +1,92 @@
 using AIService.Application.ModelManagement.Commands;
-using AIService.Domain.Enums; // For ModelType, ModelFormat
-using System.Collections.Generic;
+using AIService.Application.ModelManagement.Models.Results; // Placeholder for result models
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
+using System.Collections.Generic; // For IEnumerable
 
 namespace AIService.Application.ModelManagement.Interfaces
 {
     /// <summary>
-    /// Defines contracts for application-level model management tasks like deploying models
-    /// to the server-side, handling feedback, and initiating retraining workflows.
-    /// REQ-7-004: MLOps Integration
-    /// REQ-7-005: Model Feedback Loop
-    /// REQ-7-010: AI Model Performance Monitoring
+    /// Defines contracts for application-level model management tasks such as
+    /// uploading models, registering feedback, retrieving model status, and initiating retraining.
+    /// REQ-7-004: MLOps Integration.
+    /// REQ-7-005: Model Feedback Loop.
+    /// REQ-7-010: AI Model Performance Monitoring (partially, by getting status/triggering retraining).
     /// </summary>
     public interface IModelManagementAppService
     {
         /// <summary>
-        /// Uploads a model artifact, registers its metadata, and integrates with MLOps.
+        /// Uploads a new AI model artifact and its metadata.
         /// </summary>
-        /// <param name="modelArtifactStream">Stream of the model artifact.</param>
-        /// <param name="originalFileName">Original name of the uploaded file.</param>
-        /// <param name="modelName">User-defined name for the model.</param>
-        /// <param name="version">Version string for the model.</param>
-        /// <param name="description">Description of the model.</param>
-        /// <param name="modelType">Type of the model (e.g., PredictiveMaintenance, AnomalyDetection).</param>
-        /// <param name="modelFormat">Format of the model (e.g., ONNX, TensorFlowLite).</param>
-        /// <param name="inputSchemaJson">JSON string defining the model's input schema. REQ-7-002, REQ-7-009</param>
-        /// <param name="outputSchemaJson">JSON string defining the model's output schema.</param>
-        /// <param name="tags">Additional tags for MLOps (e.g., experiment ID, author).</param>
-        /// <returns>The unique ID of the registered AiModel.</returns>
-        Task<string> UploadAndRegisterModelAsync(
-            Stream modelArtifactStream,
-            string originalFileName,
+        /// <param name="modelName">The name of the model.</param>
+        /// <param name="modelVersion">The version of the model.</param>
+        /// <param name="modelType">The type of the model (e.g., PredictiveMaintenance, AnomalyDetection).</param>
+        /// <param name="modelFormat">The format of the model (e.g., ONNX, MLNetZip).</param>
+        /// <param name="modelFileStream">The stream containing the model artifact.</param>
+        /// <param name="description">Optional description of the model.</param>
+        /// <param name="inputSchema">Optional JSON string defining the model's input schema.</param>
+        /// <param name="outputSchema">Optional JSON string defining the model's output schema.</param>
+        /// <param name="tags">Optional dictionary of tags for the model.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>A result object indicating the success of the upload and the new model's ID.</returns>
+        Task<ModelUploadResult> UploadModelAsync(
             string modelName,
-            string version,
-            string description,
-            ModelType modelType,
-            ModelFormat modelFormat,
-            string inputSchemaJson,
-            string outputSchemaJson,
-            Dictionary<string, string> tags);
+            string modelVersion,
+            string modelType, // Consider using Domain.Enums.ModelType if stringly typing is an issue
+            string modelFormat, // Consider using Domain.Enums.ModelFormat
+            Stream modelFileStream,
+            string? description,
+            string? inputSchema,
+            string? outputSchema,
+            Dictionary<string, string>? tags,
+            CancellationToken cancellationToken = default);
 
         /// <summary>
-        /// Processes user feedback for a given model prediction.
+        /// Registers user feedback for a specific model's prediction.
         /// </summary>
-        /// <param name="feedbackCommand">Command containing feedback details.</param>
-        Task ProcessModelFeedbackAsync(RegisterModelFeedbackCommand feedbackCommand);
+        /// <param name="feedbackCommand">The command containing feedback details.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        Task<ModelOperationResult> RegisterFeedbackAsync(
+            RegisterModelFeedbackCommand feedbackCommand,
+            CancellationToken cancellationToken = default);
 
         /// <summary>
-        /// Retrieves the status of a model (e.g., from MLOps or internal state).
-        /// </summary>
-        /// <param name="modelId">The ID of the model.</param>
-        /// <param name="version">The version of the model.</param>
-        /// <returns>An object representing the model's status. // TODO: Define a specific ModelStatusDto.</returns>
-        Task<object> GetModelStatusAsync(string modelId, string version);
-
-        /// <summary>
-        /// Initiates a retraining workflow for a specified model.
-        /// </summary>
-        /// <param name="modelId">The ID of the model to retrain.</param>
-        /// <param name="version">The version of the model to base retraining on (optional).</param>
-        /// <param name="retrainingParams">Parameters for the retraining process.</param>
-        Task InitiateRetrainingWorkflowAsync(string modelId, string version, Dictionary<string, object> retrainingParams);
-
-        /// <summary>
-        /// Retrieves a list of available models, possibly with filtering/pagination.
-        /// </summary>
-        /// <returns>A list of model metadata objects. // TODO: Define a specific ModelMetadataDto.</returns>
-        Task<IEnumerable<object>> ListModelsAsync(/* TODO: Add filter/paging parameters */);
-
-        /// <summary>
-        /// Retrieves details for a specific model.
+        /// Retrieves the status of a specific AI model.
         /// </summary>
         /// <param name="modelId">The ID of the model.</param>
-        /// <param name="version">The version of the model.</param>
-        /// <returns>A model detail object. // TODO: Define a specific ModelDetailDto.</returns>
-        Task<object> GetModelDetailsAsync(string modelId, string version);
+        /// <param name="modelVersion">Optional specific version of the model. If null, status for all versions or primary version might be returned.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>Information about the model's status.</returns>
+        Task<ModelStatusInfo> GetModelStatusAsync(
+            string modelId,
+            string? modelVersion = null,
+            CancellationToken cancellationToken = default);
+        
+        /// <summary>
+        /// Gets a list of available models, potentially filtered.
+        /// </summary>
+        /// <param name="filterByName">Optional filter by model name.</param>
+        /// <param name="filterByType">Optional filter by model type.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>A list of model metadata.</returns>
+        Task<IEnumerable<ModelMetadataResult>> ListModelsAsync(
+            string? filterByName = null, 
+            string? filterByType = null, 
+            CancellationToken cancellationToken = default);
+
+
+        /// <summary>
+        /// Initiates a retraining workflow for a specified AI model.
+        /// </summary>
+        /// <param name="modelId">The ID of the model to be retrained.</param>
+        /// <param name="retrainingParameters">Parameters specific to the retraining process.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>A result object indicating the initiation of the retraining workflow.</returns>
+        Task<RetrainingInitiationResult> InitiateRetrainingWorkflowAsync(
+            string modelId,
+            Dictionary<string, object> retrainingParameters, // Simple representation for parameters
+            CancellationToken cancellationToken = default);
     }
 }

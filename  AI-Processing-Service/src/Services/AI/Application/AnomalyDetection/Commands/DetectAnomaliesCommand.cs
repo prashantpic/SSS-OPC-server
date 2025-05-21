@@ -1,16 +1,15 @@
 using MediatR;
 using System.Collections.Generic;
-// Assuming a generic AnomalyDetectionResult model or specific list of anomalies
-// For now, let's define a placeholder or use Dictionary similar to PredictionOutput
+using AIService.Application.AnomalyDetection.Models; // Assuming AnomalyDetails will be here
 
 namespace AIService.Application.AnomalyDetection.Commands
 {
     /// <summary>
-    /// Represents a request to detect anomalies in a given dataset.
-    /// REQ-7-008: Anomaly Detection
-    /// REQ-7-009: Input data requirements for AD models
+    /// Represents a request to detect anomalies in a given dataset using a specified AI model.
+    /// REQ-7-008: Core functionality for anomaly detection.
+    /// REQ-7-009: Input data requirements for anomaly detection models.
     /// </summary>
-    public class DetectAnomaliesCommand : IRequest<DetectAnomaliesCommandResult> // Define DetectAnomaliesCommandResult later
+    public class DetectAnomaliesCommand : IRequest<IEnumerable<AnomalyDetails>>
     {
         /// <summary>
         /// The unique identifier of the AI model to be used for anomaly detection.
@@ -18,52 +17,23 @@ namespace AIService.Application.AnomalyDetection.Commands
         public string ModelId { get; set; }
 
         /// <summary>
-        /// The specific version of the model to use.
+        /// The version of the AI model. If null, the latest active version might be used.
         /// </summary>
-        public string ModelVersion { get; set; }
+        public string? ModelVersion { get; set; }
 
         /// <summary>
-        /// Input data for the anomaly detection model.
-        /// This could be a single data point or a batch, depending on the model.
-        /// Keys are feature names, and values are the feature values.
+        /// A list of data points to be analyzed for anomalies. 
+        /// Each data point is a dictionary of feature names and their values.
+        /// For models processing single instance, this list might contain one item.
+        /// For models processing batches or sequences, this will contain multiple items.
         /// </summary>
-        public Dictionary<string, object> InputData { get; set; } // Or List<Dictionary<string, object>> for batch
+        public List<Dictionary<string, object>> DataPoints { get; set; }
 
-        public DetectAnomaliesCommand(string modelId, string modelVersion, Dictionary<string, object> inputData)
+        public DetectAnomaliesCommand(string modelId, List<Dictionary<string, object>> dataPoints, string? modelVersion = null)
         {
-            ModelId = modelId;
+            ModelId = modelId ?? throw new ArgumentNullException(nameof(modelId));
+            DataPoints = dataPoints ?? throw new ArgumentNullException(nameof(dataPoints));
             ModelVersion = modelVersion;
-            InputData = inputData ?? new Dictionary<string, object>();
-        }
-    }
-
-    // Placeholder for the result type. This would typically be a more structured DTO/Model.
-    // For example, it could be a list of detected anomalies with details.
-    public class DetectAnomaliesCommandResult
-    {
-        public bool Success { get; set; }
-        public List<DetectedAnomaly> Anomalies { get; set; }
-        public string ErrorMessage { get; set; }
-        public Dictionary<string, object> RawOutput { get; set; } // For additional model output
-
-        public DetectAnomaliesCommandResult()
-        {
-            Anomalies = new List<DetectedAnomaly>();
-            RawOutput = new Dictionary<string, object>();
-        }
-    }
-
-    public class DetectedAnomaly
-    {
-        public string AnomalyType { get; set; }
-        public double SeverityScore { get; set; }
-        public string Description { get; set; }
-        public Dictionary<string, object> ContributingFactors { get; set; }
-        public System.DateTime Timestamp { get; set; } // Timestamp of data point causing anomaly
-
-        public DetectedAnomaly()
-        {
-            ContributingFactors = new Dictionary<string, object>();
         }
     }
 }
