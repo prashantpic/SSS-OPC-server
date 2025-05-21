@@ -1,165 +1,149 @@
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
-using System;
-using System.IdentityModel.Tokens.Jwt;
-using System.Net.Http;
-using System.Security.Claims;
-using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
-using System.Linq;
+using System;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace GatewayService.Services
 {
-    public class TokenValidationResult
+    /// <summary>
+    /// Represents the result of a token validation operation.
+    /// </summary>
+    public record TokenValidationResult(bool IsValid, ClaimsPrincipal? ClaimsPrincipal, string? ErrorMessage, SecurityToken? ValidatedToken = null);
+
+    /// <summary>
+    /// Defines the contract for a service that validates authentication tokens.
+    /// </summary>
+    public interface ITokenValidationService
     {
-        public bool IsValid { get; set; }
-        public ClaimsPrincipal? Principal { get; set; }
-        public string? ErrorMessage { get; set; }
-        public Exception? Exception { get; set; }
+        /// <summary>
+        /// Validates the specified JWT token.
+        /// </summary>
+        /// <param name="token">The JWT token string.</param>
+        /// <param name="cancellationToken">A cancellation token.</param>
+        /// <returns>A <see cref="TokenValidationResult"/> indicating whether the token is valid and containing claims if successful.</returns>
+        Task<TokenValidationResult> ValidateTokenAsync(string token, CancellationToken cancellationToken = default);
     }
 
+    /// <summary>
+    /// Provides services for validating authentication tokens.
+    /// Implements custom token validation logic, potentially fetching public keys from an
+    /// Identity Provider's JWKS endpoint or performing custom claim validation as per REQ-3-010.
+    /// </summary>
     public class TokenValidationService : ITokenValidationService
     {
         private readonly ILogger<TokenValidationService> _logger;
         private readonly IConfiguration _configuration;
-        private readonly IHttpClientFactory _httpClientFactory;
-        private readonly string? _authority;
-        private readonly string? _audience;
-        private IConfigurationManager<OpenIdConnectConfiguration>? _configurationManager;
+        private readonly IConfigurationManager<OpenIdConnectConfiguration>? _configurationManager;
+        private readonly string? _jwtAuthority;
+        private readonly string? _jwtAudience;
 
-
-        public TokenValidationService(
-            ILogger<TokenValidationService> logger,
-            IConfiguration configuration,
-            IHttpClientFactory httpClientFactory)
+        public TokenValidationService(IConfiguration configuration, ILogger<TokenValidationService> logger)
         {
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
-            _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-            _authority = _configuration["SecurityConfigs:JwtAuthority"];
-            _audience = _configuration["SecurityConfigs:JwtAudience"];
+            _jwtAuthority = _configuration["SecurityConfigs:JwtAuthority"];
+            _jwtAudience = _configuration["SecurityConfigs:JwtAudience"];
 
-            if (string.IsNullOrEmpty(_authority))
+            if (string.IsNullOrWhiteSpace(_jwtAuthority))
             {
-                _logger.LogWarning("JWT Authority is not configured in SecurityConfigs:JwtAuthority. Token validation might be limited.");
+                _logger.LogWarning("JWT Authority (SecurityConfigs:JwtAuthority) is not configured. Standard JWT validation may be limited.");
             }
             else
             {
-                // Initialize configuration manager for fetching OIDC discovery document and JWKS
+                // For fetching signing keys from IdP (JWKS endpoint)
                 _configurationManager = new ConfigurationManager<OpenIdConnectConfiguration>(
-                    $"{_authority.TrimEnd('/')}/.well-known/openid-configuration",
+                    $"{_jwtAuthority.TrimEnd('/')}/.well-known/openid-configuration",
                     new OpenIdConnectConfigurationRetriever(),
-                    new HttpDocumentRetriever(_httpClientFactory.CreateClient("OidcClient")) { RequireHttps = _authority.StartsWith("https", StringComparison.OrdinalIgnoreCase) }
-                );
+                    new HttpDocumentRetriever { RequireHttps = _jwtAuthority.StartsWith("https://", StringComparison.OrdinalIgnoreCase) });
             }
         }
 
-        public async Task<TokenValidationResult> ValidateTokenAsync(string token, string scheme = "Bearer")
+        /// <inheritdoc/>
+        public async Task<TokenValidationResult> ValidateTokenAsync(string token, CancellationToken cancellationToken = default)
         {
-            if (string.IsNullOrEmpty(token))
+            if (string.IsNullOrWhiteSpace(token))
             {
-                return new TokenValidationResult { IsValid = false, ErrorMessage = "Token is null or empty." };
+                return new TokenValidationResult(false, null, "Token is null or empty.");
             }
 
-            if (string.IsNullOrEmpty(_authority) || _configurationManager == null)
+            if (_configurationManager == null || string.IsNullOrWhiteSpace(_jwtAuthority))
             {
-                _logger.LogWarning("JWT Authority or ConfigurationManager is not configured. Skipping full validation.");
-                // Potentially perform very basic JWT parsing if needed, but full validation is not possible.
-                // For now, consider it invalid if authority is missing for robust security.
-                return new TokenValidationResult { IsValid = false, ErrorMessage = "JWT Authority not configured for validation." };
+                _logger.LogWarning("JWT Authority or ConfigurationManager not configured. Cannot perform full token validation via JWKS discovery.");
+                // Fallback or error, depending on requirements.
+                // This implementation will attempt standard validation if authority is missing, but it might fail without keys.
+                // For a robust system, this should likely be a hard failure if authority is expected.
+                return new TokenValidationResult(false, null, "Token validation service is not properly configured with an authority.");
             }
 
             try
             {
-                var discoveryDocument = await _configurationManager.GetConfigurationAsync(default);
+                var discoveryDocument = await _configurationManager.GetConfigurationAsync(cancellationToken);
                 var signingKeys = discoveryDocument.SigningKeys;
 
                 var validationParameters = new TokenValidationParameters
                 {
                     ValidateIssuer = true,
-                    ValidIssuer = _authority,
+                    ValidIssuer = _jwtAuthority, // Issuer from IdP
 
-                    ValidateAudience = !string.IsNullOrEmpty(_audience), // Validate audience only if configured
-                    ValidAudience = _audience,
+                    ValidateAudience = true,
+                    ValidAudience = _jwtAudience, // Your API's audience
 
                     ValidateIssuerSigningKey = true,
-                    IssuerSigningKeys = signingKeys, // Use keys from JWKS endpoint
+                    IssuerSigningKeys = signingKeys, // Keys from IdP
 
                     ValidateLifetime = true,
-                    ClockSkew = TimeSpan.FromMinutes(5) // Allow for some clock drift
+                    ClockSkew = TimeSpan.FromMinutes(1) // Allow for small clock differences
                 };
 
-                var handler = new JwtSecurityTokenHandler();
-                var principal = handler.ValidateToken(token, validationParameters, out var validatedToken);
+                var tokenHandler = new JwtSecurityTokenHandler();
+                SecurityToken validatedToken;
+                ClaimsPrincipal claimsPrincipal;
 
-                if (validatedToken == null)
-                {
-                    _logger.LogWarning("Token validation failed: validatedToken is null.");
-                    return new TokenValidationResult { IsValid = false, ErrorMessage = "Token validation resulted in null security token." };
-                }
+                claimsPrincipal = tokenHandler.ValidateToken(token, validationParameters, out validatedToken);
 
-                // REQ-3-010: Placeholder for custom claim validation or token introspection
-                // Example: Check for a specific scope or claim
-                // if (!principal.HasClaim(c => c.Type == "scope" && c.Value.Split(' ').Contains("api.read")))
+                // REQ-3-010: Custom claim validation can be added here if needed.
+                // For example, check for specific roles or scopes:
+                // if (!claimsPrincipal.IsInRole("RequiredRole"))
                 // {
-                //     _logger.LogWarning("Token validation failed: Missing required scope 'api.read'.");
-                //     return new TokenValidationResult { IsValid = false, Principal = principal, ErrorMessage = "Missing required scope." };
+                //     _logger.LogWarning("Token validation failed: User does not have required role.");
+                //     return new TokenValidationResult(false, null, "User does not have required role.");
                 // }
 
-                // Example: Placeholder for token introspection call to Security Service
-                // var introspectionEndpoint = _configuration["SecurityConfigs:IntrospectionEndpoint"];
-                // if (!string.IsNullOrEmpty(introspectionEndpoint))
-                // {
-                //     var introspectionClient = _httpClientFactory.CreateClient("IntrospectionClient");
-                //     var introspectionResponse = await introspectionClient.PostAsync(introspectionEndpoint, new FormUrlEncodedContent(new Dictionary<string, string> { { "token", token } }));
-                //     if (!introspectionResponse.IsSuccessStatusCode)
-                //     {
-                //         _logger.LogWarning("Token introspection failed with status: {StatusCode}", introspectionResponse.StatusCode);
-                //         return new TokenValidationResult { IsValid = false, Principal = principal, ErrorMessage = "Token introspection failed." };
-                //     }
-                //     var introspectionResult = await introspectionResponse.Content.ReadFromJsonAsync<IntrospectionResult>(); // Define IntrospectionResult class
-                //     if (introspectionResult == null || !introspectionResult.Active)
-                //     {
-                //         _logger.LogWarning("Token introspection reported token as inactive.");
-                //         return new TokenValidationResult { IsValid = false, Principal = principal, ErrorMessage = "Token is not active (via introspection)." };
-                //     }
-                // }
-
-
-                _logger.LogInformation("Token validated successfully for issuer: {Issuer}", validatedToken.Issuer);
-                return new TokenValidationResult { IsValid = true, Principal = principal };
+                _logger.LogInformation("Token validated successfully for user: {User}", claimsPrincipal.Identity?.Name ?? "Unknown");
+                return new TokenValidationResult(true, claimsPrincipal, null, validatedToken);
             }
             catch (SecurityTokenExpiredException ex)
             {
-                _logger.LogWarning(ex, "Token validation failed: Token is expired.");
-                return new TokenValidationResult { IsValid = false, ErrorMessage = "Token has expired.", Exception = ex };
+                _logger.LogWarning(ex, "Token validation failed: Token expired.");
+                return new TokenValidationResult(false, null, $"Token expired: {ex.Message}");
             }
             catch (SecurityTokenInvalidSignatureException ex)
             {
                 _logger.LogWarning(ex, "Token validation failed: Invalid signature.");
-                return new TokenValidationResult { IsValid = false, ErrorMessage = "Token signature is invalid.", Exception = ex };
+                return new TokenValidationResult(false, null, $"Invalid token signature: {ex.Message}");
+            }
+            catch (SecurityTokenInvalidIssuerException ex)
+            {
+                _logger.LogWarning(ex, "Token validation failed: Invalid issuer.");
+                return new TokenValidationResult(false, null, $"Invalid issuer: {ex.Message}");
+            }
+            catch (SecurityTokenInvalidAudienceException ex)
+            {
+                _logger.LogWarning(ex, "Token validation failed: Invalid audience.");
+                return new TokenValidationResult(false, null, $"Invalid audience: {ex.Message}");
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "An unexpected error occurred during token validation.");
-                return new TokenValidationResult { IsValid = false, ErrorMessage = $"An unexpected error occurred: {ex.Message}", Exception = ex };
+                return new TokenValidationResult(false, null, $"An unexpected error occurred: {ex.Message}");
             }
         }
-
-        public async Task<bool> IsTokenValidAsync(string token, string scheme = "Bearer")
-        {
-            var result = await ValidateTokenAsync(token, scheme);
-            return result.IsValid;
-        }
-
-        // Placeholder for a potential IntrospectionResult DTO
-        // private class IntrospectionResult
-        // {
-        //     public bool Active { get; set; }
-        //     // Add other fields as needed, e.g., scope, client_id, username, exp
-        // }
     }
 }
