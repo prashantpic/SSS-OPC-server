@@ -1,6 +1,8 @@
-using AIService.Infrastructure.Clients;
-using Microsoft.Extensions.Configuration;
+```csharp
+using AIService.Infrastructure.Clients; // Assuming DataServiceClient is here
+using AIService.Infrastructure.Configuration; // For ModelOptions
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using System;
 using System.IO;
 using System.Threading.Tasks;
@@ -10,126 +12,119 @@ namespace AIService.Infrastructure.AI.Common
     public class ModelFileLoader
     {
         private readonly ILogger<ModelFileLoader> _logger;
-        private readonly DataServiceClient _dataServiceClient; // Assuming this client can fetch model artifacts
-        private readonly IConfiguration _configuration;
-        private readonly string _localModelBasePath;
+        private readonly DataServiceClient _dataServiceClient; // Optional, if models can be fetched from DataService
+        private readonly ModelOptions _modelOptions;
 
         public ModelFileLoader(
             ILogger<ModelFileLoader> logger,
-            DataServiceClient dataServiceClient, // Can be null if DataService is not used for artifacts
-            IConfiguration configuration)
+            IOptions<ModelOptions> modelOptions,
+            DataServiceClient dataServiceClient = null) // DataServiceClient is optional
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _dataServiceClient = dataServiceClient; // Allowed to be null
-            _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
-            _localModelBasePath = _configuration["ModelOptions:ModelStorageBasePath"]; // Example config key
+            _modelOptions = modelOptions?.Value ?? throw new ArgumentNullException(nameof(modelOptions));
+            _dataServiceClient = dataServiceClient; // Can be null if not configured/used
         }
 
         /// <summary>
-        /// Loads a model file stream based on its storage reference.
-        /// The storageReference can be a local file path or an identifier for the Data Service.
+        /// Loads a model file into a stream.
         /// </summary>
-        /// <param name="storageReference">Identifier for the model file.
-        /// Examples:
-        /// - "dataservice://models/pm_model_v1.onnx" (protocol indicates source)
-        /// - "model_artifact_id_12345" (an ID to be resolved by DataServiceClient)
-        /// - "/mnt/models/local_model.pb" (an absolute local path)
-        /// - "relative/path/to/model.zip" (a relative local path, resolved against _localModelBasePath)
+        /// <param name="storageReference">
+        /// A reference to the model's storage location.
+        /// This could be a local file path, an identifier for DataService (e.g., "dataservice://model-id/version"),
+        /// or a URI.
         /// </param>
-        /// <returns>A Stream containing the model file, or null if not found.</returns>
-        public async Task<Stream> LoadModelFileAsync(string storageReference)
+        /// <param name="modelNameForLog">Optional model name for logging.</param>
+        /// <returns>A stream containing the model data. The caller is responsible for disposing the stream.</returns>
+        /// <exception cref="FileNotFoundException">If the model file cannot be found.</exception>
+        /// <exception cref="ArgumentException">If the storage reference is invalid.</exception>
+        public async Task<Stream> LoadModelFileAsync(string storageReference, string modelNameForLog = null)
         {
             if (string.IsNullOrWhiteSpace(storageReference))
             {
-                _logger.LogError("Storage reference for model file is null or empty.");
-                throw new ArgumentNullException(nameof(storageReference));
+                throw new ArgumentException("Storage reference cannot be null or whitespace.", nameof(storageReference));
             }
 
-            _logger.LogInformation("Attempting to load model file from storage reference: {StorageReference}", storageReference);
+            modelNameForLog = modelNameForLog ?? storageReference;
+            _logger.LogInformation("Attempting to load model file '{ModelName}' from storage reference: {StorageReference}", modelNameForLog, storageReference);
 
-            try
+            // Strategy 1: Check for DataService specific scheme
+            if (storageReference.StartsWith("dataservice://", StringComparison.OrdinalIgnoreCase))
             {
-                // Scheme 1: URI-based reference (e.g., "dataservice://<id>", "file://<path>")
-                if (Uri.TryCreate(storageReference, UriKind.Absolute, out Uri uri))
+                if (_dataServiceClient == null)
                 {
-                    if (uri.Scheme.Equals("dataservice", StringComparison.OrdinalIgnoreCase))
+                    _logger.LogError("DataServiceClient is not configured, cannot load model '{ModelName}' from DataService reference: {StorageReference}", modelNameForLog, storageReference);
+                    throw new InvalidOperationException("DataServiceClient is not available to handle 'dataservice://' references.");
+                }
+                
+                // Parse modelId and version from storageReference (e.g., "dataservice://<modelId>/<version>")
+                var parts = storageReference.Substring("dataservice://".Length).Split('/');
+                if (parts.Length < 1) // At least modelId is needed. Version might be optional or handled by DataServiceClient.
+                {
+                     _logger.LogError("Invalid DataService storage reference format for model '{ModelName}': {StorageReference}. Expected 'dataservice://modelId[/version]'.", modelNameForLog, storageReference);
+                    throw new ArgumentException("Invalid DataService storage reference format. Expected 'dataservice://modelId[/version]'.", nameof(storageReference));
+                }
+                string modelId = parts[0];
+                string version = parts.Length > 1 ? parts[1] : null; // Version is optional
+
+                _logger.LogDebug("Fetching model '{ModelName}' (ID: {ModelId}, Version: {Version}) from DataService.", modelNameForLog, modelId, version ?? "latest");
+                try
+                {
+                    var modelArtifactStream = await _dataServiceClient.GetModelArtifactStreamAsync(modelId, version);
+                    if (modelArtifactStream == null || modelArtifactStream == Stream.Null || (modelArtifactStream.CanSeek && modelArtifactStream.Length == 0) )
                     {
-                        if (_dataServiceClient == null)
-                        {
-                            _logger.LogError("DataServiceClient is not configured, cannot load model from dataservice URI: {Uri}", uri);
-                            throw new InvalidOperationException("DataServiceClient is not available to fetch model artifacts from Data Service.");
-                        }
-                        var modelId = uri.Host + uri.PathAndQuery; // Or parse path segments more carefully
-                         _logger.LogInformation("Fetching model artifact '{ModelId}' from Data Service.", modelId);
-                        // Assuming DataServiceClient has a method like GetModelArtifactStreamAsync(string modelId)
-                        return await _dataServiceClient.GetModelArtifactStreamAsync(modelId);
+                        _logger.LogError("Model artifact for '{ModelName}' (ID: {ModelId}, Version: {Version}) not found or is empty in DataService.", modelNameForLog, modelId, version ?? "latest");
+                        throw new FileNotFoundException($"Model artifact for '{modelNameForLog}' (ID: {modelId}, Version: {version ?? "latest"}) not found or is empty in DataService.");
                     }
-                    else if (uri.IsFile)
-                    {
-                        _logger.LogInformation("Loading model from local file URI: {FilePath}", uri.LocalPath);
-                        if (File.Exists(uri.LocalPath))
-                        {
-                            return new FileStream(uri.LocalPath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true);
-                        }
-                        else
-                        {
-                            _logger.LogError("Model file not found at local URI path: {FilePath}", uri.LocalPath);
-                            return null;
-                        }
-                    }
-                    // Add other schemes like "http://", "https://" if models can be fetched from URLs
+                    _logger.LogInformation("Model file '{ModelName}' loaded successfully from DataService.", modelNameForLog);
+                    return modelArtifactStream;
                 }
-
-                // Scheme 2: Raw ID for DataService (heuristic: not a path, not a full URI)
-                // This is a weaker heuristic. A prefix like "ds:" might be better.
-                bool looksLikeId = !storageReference.Contains(Path.DirectorySeparatorChar) && !storageReference.Contains(Path.AltDirectorySeparatorChar) && !storageReference.Contains(":");
-                if (looksLikeId && _dataServiceClient != null)
+                catch (Exception ex)
                 {
-                    _logger.LogInformation("Assuming '{StorageReference}' is a Data Service artifact ID. Fetching...", storageReference);
-                     // This is a fallback, prefer explicit "dataservice://" scheme
-                    var stream = await _dataServiceClient.GetModelArtifactStreamAsync(storageReference);
-                    if (stream != null) return stream;
-                    _logger.LogWarning("Model artifact ID '{StorageReference}' not found via Data Service. Trying local path next.", storageReference);
-                }
-
-
-                // Scheme 3: Local file path (absolute or relative to base path)
-                string localPath = storageReference;
-                if (!Path.IsPathRooted(localPath) && !string.IsNullOrEmpty(_localModelBasePath))
-                {
-                    localPath = Path.Combine(_localModelBasePath, localPath);
-                    _logger.LogInformation("Resolved relative model path to: {FullPath}", localPath);
-                }
-                else if (!Path.IsPathRooted(localPath))
-                {
-                    // Relative path without a base path - try relative to application base
-                    localPath = Path.Combine(AppContext.BaseDirectory, localPath);
-                     _logger.LogInformation("Resolved relative model path (no base path configured) to: {FullPath}", localPath);
-                }
-
-
-                if (File.Exists(localPath))
-                {
-                    _logger.LogInformation("Loading model from local file system path: {FilePath}", localPath);
-                    return new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true);
-                }
-                else
-                {
-                    _logger.LogError("Model file not found at resolved local path: {FilePath}", localPath);
+                    _logger.LogError(ex, "Failed to load model '{ModelName}' (ID: {ModelId}, Version: {Version}) from DataService.", modelNameForLog, modelId, version ?? "latest");
+                    throw; // Re-throw to allow execution engine to handle
                 }
             }
-            catch (Exception ex)
+
+            // Strategy 2: Check for absolute path (local file system)
+            // This might be restricted for security in a service environment.
+            // Use ModelOptions.ModelStorageBasePath as a prefix if storageReference is relative.
+            string fullPath = storageReference;
+            if (!Path.IsPathRooted(storageReference))
             {
-                _logger.LogError(ex, "Error loading model file from storage reference: {StorageReference}", storageReference);
-                throw; // Or return null depending on desired error handling
+                if (string.IsNullOrWhiteSpace(_modelOptions.ModelStorageBasePath))
+                {
+                    _logger.LogError("ModelStorageBasePath is not configured. Cannot resolve relative path for model '{ModelName}': {StorageReference}", modelNameForLog, storageReference);
+                    throw new InvalidOperationException("ModelStorageBasePath is not configured for relative model paths.");
+                }
+                fullPath = Path.Combine(_modelOptions.ModelStorageBasePath, storageReference);
             }
 
-            _logger.LogWarning("Failed to load model from storage reference: {StorageReference} using any known method.", storageReference);
-            return null;
+            if (File.Exists(fullPath))
+            {
+                _logger.LogInformation("Loading model file '{ModelName}' from local path: {FullPath}", modelNameForLog, fullPath);
+                try
+                {
+                    // Return a new FileStream. The caller is responsible for disposing it.
+                    // Open with read-only and allow shared read access.
+                    return new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                }
+                catch (Exception ex)
+                {
+                     _logger.LogError(ex, "Failed to open model file '{ModelName}' from local path: {FullPath}", modelNameForLog, fullPath);
+                    throw; // Re-throw
+                }
+            }
+            
+            // Strategy 3: Interpret as URI (e.g., HTTP/HTTPS) - Not implemented here for brevity, would need HttpClient
+            if (Uri.TryCreate(storageReference, UriKind.Absolute, out Uri uriResult) &&
+                (uriResult.Scheme == Uri.UriSchemeHttp || uriResult.Scheme == Uri.UriSchemeHttps))
+            {
+                _logger.LogWarning("Loading model from HTTP/HTTPS URI ({Uri}) is not implemented in this version of ModelFileLoader.", storageReference);
+                throw new NotImplementedException("Loading models from HTTP/HTTPS URIs is not yet implemented.");
+            }
+
+            _logger.LogError("Model file '{ModelName}' not found at storage reference: {StorageReference} (resolved to: {ResolvedPath}) and not a recognized scheme.", modelNameForLog, storageReference, fullPath);
+            throw new FileNotFoundException($"Model file '{modelNameForLog}' not found or accessible via reference: {storageReference}.", storageReference);
         }
-
-        // Consider adding caching mechanisms here if models are frequently reloaded
-        // and DataServiceClient/FileStream access is expensive.
-        // For example, an in-memory cache for model byte arrays with an eviction policy.
     }
 }

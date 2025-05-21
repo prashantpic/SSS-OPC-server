@@ -1,17 +1,11 @@
+```csharp
 using AIService.Domain.Interfaces;
-using AIService.Domain.Models;
-using AIService.Infrastructure.Clients;
+using AIService.Domain.Models; // For AiModel
+using AIService.Infrastructure.Clients; // For DataServiceClient
 using Microsoft.Extensions.Logging;
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
-// Assuming DataServiceClient communicates with a gRPC service defined by REPO-DATA-SERVICE
-// For AiModel metadata, DataServiceClient might interact with methods like:
-// - GetAiModelMetadata(GetAiModelMetadataRequest) returns AiModelMetadataResponse
-// - SaveAiModelMetadata(SaveAiModelMetadataRequest) returns Empty
-// For AiModel artifacts:
-// - GetAiModelArtifact(GetAiModelArtifactRequest) returns stream or AiModelArtifactResponse with bytes/stream info
 
 namespace AIService.Infrastructure.Persistence
 {
@@ -29,107 +23,119 @@ namespace AIService.Infrastructure.Persistence
         public async Task<AiModel> GetModelAsync(string modelId, string version = null)
         {
             if (string.IsNullOrWhiteSpace(modelId))
-                throw new ArgumentNullException(nameof(modelId));
+            {
+                throw new ArgumentException("Model ID cannot be null or whitespace.", nameof(modelId));
+            }
 
-            _logger.LogDebug("Fetching model metadata for ID: {ModelId}, Version: {Version}", modelId, version ?? "latest");
+            _logger.LogDebug("Fetching model metadata for ID: {ModelId}, Version: {Version} from DataService.", modelId, version ?? "latest");
             try
             {
-                // DataServiceClient should have a method that maps to the gRPC call in REPO-DATA-SERVICE
-                // e.g., _dataServiceClient.GetAiModelMetadataAsync(modelId, version);
-                var modelData = await _dataServiceClient.GetAiModelMetadataAsync(modelId, version);
-
-                if (modelData == null)
+                // Assuming DataServiceClient has a method to get AiModel metadata
+                var model = await _dataServiceClient.GetAiModelMetadataAsync(modelId, version);
+                if (model == null)
                 {
-                    _logger.LogWarning("Model metadata not found for ID: {ModelId}, Version: {Version}", modelId, version ?? "latest");
-                    return null;
+                    _logger.LogWarning("Model metadata for ID: {ModelId}, Version: {Version} not found in DataService.", modelId, version ?? "latest");
                 }
-                
-                // Map from DataService's DTO/gRPC message to Domain.AiModel
-                // This mapping depends on the structure of modelData from DataServiceClient
-                return modelData; // Assuming DataServiceClient already returns the Domain.AiModel
+                return model;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error fetching model metadata for ID: {ModelId}, Version: {Version}", modelId, version ?? "latest");
-                throw; // Or handle specific exceptions from DataServiceClient
-            }
-        }
-
-        public async Task SaveModelAsync(AiModel model)
-        {
-            if (model == null)
-                throw new ArgumentNullException(nameof(model));
-
-            _logger.LogDebug("Saving model metadata for ID: {ModelId}, Name: {ModelName}, Version: {ModelVersion}", model.Id, model.Name, model.Version);
-            try
-            {
-                // DataServiceClient should have a method that maps to the gRPC call in REPO-DATA-SERVICE
-                // e.g., _dataServiceClient.SaveAiModelMetadataAsync(model);
-                await _dataServiceClient.SaveAiModelMetadataAsync(model);
-                _logger.LogInformation("Model metadata saved successfully for ID: {ModelId}", model.Id);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error saving model metadata for ID: {ModelId}", model.Id);
-                throw;
+                _logger.LogError(ex, "Error fetching model metadata for ID: {ModelId}, Version: {Version} from DataService.", modelId, version ?? "latest");
+                throw; // Or handle more gracefully, e.g., return null or throw custom exception
             }
         }
 
         public async Task<Stream> GetModelArtifactStreamAsync(string modelId, string version = null)
         {
             if (string.IsNullOrWhiteSpace(modelId))
-                throw new ArgumentNullException(nameof(modelId));
-
-            _logger.LogDebug("Fetching model artifact stream for ID: {ModelId}, Version: {Version}", modelId, version ?? "latest");
+            {
+                throw new ArgumentException("Model ID cannot be null or whitespace.", nameof(modelId));
+            }
+            _logger.LogDebug("Fetching model artifact stream for ID: {ModelId}, Version: {Version} from DataService.", modelId, version ?? "latest");
             try
             {
-                // DataServiceClient should have a method that maps to the gRPC call in REPO-DATA-SERVICE
-                // e.g., _dataServiceClient.GetModelArtifactStreamAsync(modelId, version);
+                // Assuming DataServiceClient has a method to get the artifact stream
                 var stream = await _dataServiceClient.GetModelArtifactStreamAsync(modelId, version);
-
-                if (stream == null || stream.Length == 0)
+                if (stream == null || stream == Stream.Null || (stream.CanSeek && stream.Length == 0))
                 {
-                    _logger.LogWarning("Model artifact stream not found or empty for ID: {ModelId}, Version: {Version}", modelId, version ?? "latest");
-                    return null;
+                     _logger.LogWarning("Model artifact stream for ID: {ModelId}, Version: {Version} not found or is empty in DataService.", modelId, version ?? "latest");
+                    //  throw new FileNotFoundException($"Model artifact for ID {modelId}, Version {version ?? "latest"} not found or is empty.");
+                    return null; // Or throw
                 }
                 return stream;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error fetching model artifact stream for ID: {ModelId}, Version: {Version}", modelId, version ?? "latest");
+                _logger.LogError(ex, "Error fetching model artifact stream for ID: {ModelId}, Version: {Version} from DataService.", modelId, version ?? "latest");
                 throw;
             }
         }
 
-        public async Task StoreModelArtifactAsync(string modelId, string version, Stream artifactStream, string fileName)
+        public async Task<AiModel> SaveModelAsync(AiModel model, Stream modelArtifactStream = null)
         {
-            if (string.IsNullOrWhiteSpace(modelId)) throw new ArgumentNullException(nameof(modelId));
-            if (artifactStream == null) throw new ArgumentNullException(nameof(artifactStream));
-            if (string.IsNullOrWhiteSpace(fileName)) throw new ArgumentNullException(nameof(fileName));
+            if (model == null)
+            {
+                throw new ArgumentNullException(nameof(model));
+            }
+             if (string.IsNullOrWhiteSpace(model.Name) || string.IsNullOrWhiteSpace(model.Version))
+            {
+                throw new ArgumentException("Model Name and Version must be provided.", nameof(model));
+            }
 
-            _logger.LogDebug("Storing model artifact for ID: {ModelId}, Version: {Version}, FileName: {FileName}", modelId, version, fileName);
+            _logger.LogDebug("Saving model metadata for Name: {ModelName}, Version: {ModelVersion} to DataService.", model.Name, model.Version);
             try
             {
-                await _dataServiceClient.StoreModelArtifactAsync(modelId, version, artifactStream, fileName);
-                _logger.LogInformation("Model artifact stored successfully for ID: {ModelId}, Version: {Version}", modelId, version);
+                // This might be a two-step process if DataServiceClient separates metadata and artifact storage.
+                // 1. Store artifact if stream is provided, get back a storage reference.
+                // 2. Update model.StorageReference with this new reference.
+                // 3. Save AiModel metadata.
+
+                if (modelArtifactStream != null)
+                {
+                    _logger.LogDebug("Uploading model artifact for {ModelName} version {ModelVersion}.", model.Name, model.Version);
+                    // Assuming DataServiceClient has a method to store an artifact and it returns a reference
+                    // This method might take model.Id and model.Version as part of the key.
+                    string storageReference = await _dataServiceClient.SaveModelArtifactAsync(model, modelArtifactStream);
+                    if (string.IsNullOrWhiteSpace(storageReference))
+                    {
+                        _logger.LogError("Failed to save model artifact for {ModelName} version {ModelVersion}; storage reference was empty.", model.Name, model.Version);
+                        throw new Exception("Failed to save model artifact; no storage reference returned.");
+                    }
+                    model.StorageReference = storageReference; // Update the model with the actual storage path/ID
+                     _logger.LogInformation("Model artifact for {ModelName} version {ModelVersion} saved. StorageReference: {StorageReference}", model.Name, model.Version, storageReference);
+                }
+                else if (string.IsNullOrWhiteSpace(model.StorageReference))
+                {
+                    _logger.LogWarning("Saving model {ModelName} version {ModelVersion} without an artifact stream or an existing storage reference.", model.Name, model.Version);
+                }
+                
+                // Assuming DataServiceClient has a method to save AiModel metadata
+                var savedModel = await _dataServiceClient.SaveAiModelMetadataAsync(model);
+                _logger.LogInformation("Model metadata for Name: {ModelName}, Version: {ModelVersion} saved successfully to DataService. ID: {ModelId}", savedModel.Name, savedModel.Version, savedModel.Id);
+                return savedModel;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error storing model artifact for ID: {ModelId}, Version: {Version}", modelId, version);
+                _logger.LogError(ex, "Error saving model metadata for Name: {ModelName}, Version: {ModelVersion} to DataService.", model.Name, model.Version);
                 throw;
             }
         }
 
-        public async Task<IEnumerable<AiModel>> ListModelsAsync(string modelType = null, string modelFormat = null)
+        public async Task DeleteModelAsync(string modelId, string version = null)
         {
-            _logger.LogDebug("Listing models with Type: {ModelType}, Format: {ModelFormat}", modelType ?? "any", modelFormat ?? "any");
+            if (string.IsNullOrWhiteSpace(modelId))
+            {
+                throw new ArgumentException("Model ID cannot be null or whitespace.", nameof(modelId));
+            }
+            _logger.LogInformation("Requesting deletion of model ID: {ModelId}, Version: {Version} from DataService.", modelId, version ?? "all");
             try
             {
-                return await _dataServiceClient.ListAiModelsAsync(modelType, modelFormat);
+                await _dataServiceClient.DeleteAiModelAsync(modelId, version);
+                _logger.LogInformation("Model ID: {ModelId}, Version: {Version} deletion request sent to DataService.", modelId, version ?? "all");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error listing models from Data Service.");
+                 _logger.LogError(ex, "Error deleting model ID: {ModelId}, Version: {Version} from DataService.", modelId, version ?? "all");
                 throw;
             }
         }

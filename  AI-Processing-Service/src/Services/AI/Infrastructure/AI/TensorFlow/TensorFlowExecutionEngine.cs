@@ -1,230 +1,196 @@
+```csharp
 using AIService.Domain.Enums;
 using AIService.Domain.Interfaces;
 using AIService.Domain.Models;
-using AIService.Infrastructure.AI.Common;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using Tensorflow;
-using Tensorflow.Keras.Utils;
-using Tensorflow.NumPy; // For NDArray
+// Using TensorFlow.NET. Placeholder for actual TensorFlow.NET usage.
+// Actual package might be TensorFlow.NET or SciSharp.TensorFlow.Redist
+// This requires a more specific setup (Python environment sometimes, native binaries)
+// For TFLite, specific TFLite .NET bindings would be needed.
+using Tensorflow; // Assuming this is the main namespace for TensorFlow.NET
+using Tensorflow.Keras.Engine; // For Model/Functional if loading Keras models
 
 namespace AIService.Infrastructure.AI.TensorFlow
 {
     public class TensorFlowExecutionEngine : IModelExecutionEngine
     {
         private readonly ILogger<TensorFlowExecutionEngine> _logger;
-        private readonly ModelFileLoader _modelFileLoader;
-        private Graph _graph;
-        private Session _session;
+        private IModel _tfModel; // Or Session for older TF1 graph-based models
         private AiModel _modelDetails;
-        private bool _isTfLiteModel = false;
+        // For TFLite: private Interpreter _tfliteInterpreter;
 
-        // TODO: TensorFlow.NET setup might require specific initialization.
-        // Ensure Graph.DefaultGraph is handled correctly if multiple models are loaded.
-
-        public TensorFlowExecutionEngine(ILogger<TensorFlowExecutionEngine> logger, ModelFileLoader modelFileLoader)
+        public TensorFlowExecutionEngine(ILogger<TensorFlowExecutionEngine> logger)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _modelFileLoader = modelFileLoader ?? throw new ArgumentNullException(nameof(modelFileLoader));
-            // Initialize TensorFlow.NET specific settings if necessary
-            // TF_API.꽤_Initialize(); // Example, check TensorFlow.NET documentation
         }
 
-        public ModelFormat SupportedFormat => ModelFormat.TensorFlow; // Also handles TensorFlowLite
+        public ModelFormat HandledFormat => ModelFormat.TensorFlow; // Could also handle TensorFlowLite
 
-        public bool CanHandle(AiModel model)
-        {
-            return model?.ModelFormat == ModelFormat.TensorFlow || model?.ModelFormat == ModelFormat.TensorFlowLite;
-        }
+        public bool CanHandle(ModelFormat format) => format == ModelFormat.TensorFlow || format == ModelFormat.TensorFlowLite;
 
-        public async Task LoadModelAsync(AiModel model)
+        public async Task LoadModelAsync(AiModel model, Stream modelStream)
         {
             if (model == null)
                 throw new ArgumentNullException(nameof(model));
-            if (model.ModelFormat != ModelFormat.TensorFlow && model.ModelFormat != ModelFormat.TensorFlowLite)
-                throw new ArgumentException($"Model format {model.ModelFormat} is not supported by {nameof(TensorFlowExecutionEngine)}.", nameof(model));
+            if (modelStream == null) // TensorFlow.NET typically loads from a directory path
+                throw new ArgumentNullException(nameof(modelStream) + " TensorFlow typically loads from a directory. Stream loading needs custom handling or saving to temp path.");
 
             _modelDetails = model;
-            _isTfLiteModel = model.ModelFormat == ModelFormat.TensorFlowLite;
 
-            _logger.LogInformation("Loading TensorFlow model: {ModelName} Version: {ModelVersion} from {StorageReference}. Is TFLite: {IsTfLite}",
-                model.Name, model.Version, model.StorageReference, _isTfLiteModel);
+            // TensorFlow.NET model loading usually expects a path to a SavedModel directory.
+            // If modelStream is a .zip of SavedModel, it needs to be extracted to a temporary directory first.
+            // If it's a .pb file (frozen graph), loading is different.
+            // If it's TFLite (.tflite file), loading is also different.
 
+            // This is a placeholder path. In reality, you'd save the stream to a temp location
+            // and structure it as TensorFlow expects (e.g., a SavedModel directory).
+            string tempModelPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+            Directory.CreateDirectory(tempModelPath); 
+            // Assuming modelStream is a zip file containing SavedModel structure:
+            // e.g., saved_model.pb, variables/
+            // Code to extract modelStream to tempModelPath would be here.
+            // For simplicity, let's assume modelStream represents the path to the saved model directory for now,
+            // or the ModelFileLoader gives a directory path. This is not ideal with the Stream signature.
+            // The ModelFileLoader should ideally provide a file path after downloading/extracting.
+            // Let's assume `model.StorageReference` contains the actual path after ModelFileLoader.
+            
+            var actualModelPath = model.StorageReference; // This should be set by the caller or ModelFileLoader
+             if (!Directory.Exists(actualModelPath) && !File.Exists(actualModelPath))
+            {
+                _logger.LogError($"TensorFlow model path '{actualModelPath}' not found. Stream based loading to a path needs implementation.");
+                 // Fallback: try to save stream to a temp file/dir if `actualModelPath` is not usable
+                if(modelStream.CanSeek) modelStream.Seek(0, SeekOrigin.Begin);
+                var tempFilePath = Path.Combine(Path.GetTempPath(), model.Name + "_" + model.Version + (model.ModelFormat == ModelFormat.TensorFlowLite ? ".tflite" : ".pb_or_dir"));
+                using(var fs = new FileStream(tempFilePath, FileMode.Create, FileAccess.Write))
+                {
+                    await modelStream.CopyToAsync(fs);
+                }
+                actualModelPath = tempFilePath; // This is still problematic if it's a dir
+                _logger.LogWarning($"Saved model stream to temporary path: {actualModelPath}. This path might need to be a directory for SavedModel.");
+
+            }
+
+
+            _logger.LogInformation("Loading TensorFlow model {ModelName} version {ModelVersion} from {Path}.", model.Name, model.Version, actualModelPath);
             try
             {
-                var modelStream = await _modelFileLoader.LoadModelFileAsync(model.StorageReference);
-                if (modelStream == null || modelStream.Length == 0)
+                if (model.ModelFormat == ModelFormat.TensorFlowLite)
                 {
-                    throw new FileNotFoundException($"Model file could not be loaded from {model.StorageReference}");
+                    // Example for TFLite - Requires a TFLite .NET wrapper
+                    // _tfliteInterpreter = new Interpreter(actualModelPath_or_modelBytes);
+                    // _tfliteInterpreter.AllocateTensors();
+                    _logger.LogWarning("TFLite execution via TensorFlow.NET is illustrative and may require specific TFLite bindings.");
+                    // For this example, we'll assume TensorFlow.NET can handle it or it's not the primary path
+                    throw new NotImplementedException("TFLite loading requires a specific .NET TFLite interpreter library.");
                 }
-
-                byte[] modelBytes;
-                using (var memoryStream = new MemoryStream())
+                else // Assuming SavedModel format
                 {
-                    await modelStream.CopyToAsync(memoryStream);
-                    modelBytes = memoryStream.ToArray();
+                    // This depends heavily on the TensorFlow.NET API version and model type (Keras, Estimator, raw graph)
+                    // For Keras SavedModel:
+                    // _tfModel = Tensorflow.Keras.Models.load_model(actualModelPath);
+                    
+                    // For generic SavedModel (TF2):
+                    // var loaded = Tensorflow.SavedModel.load(actualModelPath);
+                    // _tfModel = loaded; // 'loaded' might be a different type, like ConcreteFunction
+                    
+                    // For TF1 Session/Graph based:
+                    // var graph = new Graph();
+                    // graph.Import(actualModelPath); // if it's a frozen .pb file
+                    // _session = new Session(graph);
+
+                    _logger.LogWarning("TensorFlow.NET model loading is highly dependent on model format (SavedModel, Keras, frozen graph) and TF.NET API. This is a placeholder.");
+                    // This is a conceptual placeholder.
+                    // _tfModel = SomeTensorFlowModelLoader.Load(actualModelPath);
+                    throw new NotImplementedException("Actual TensorFlow.NET model loading (SavedModel, Keras, etc.) needs specific implementation based on TensorFlow.NET API version.");
                 }
-                await modelStream.DisposeAsync();
-
-                _graph = new Graph();
-                _session = new Session(_graph);
-
-                if (_isTfLiteModel)
-                {
-                    // TensorFlow.NET's TFLite support might be through importing a graph def
-                    // or direct interpreter interaction. The latter is more common for TFLite.
-                    // As of current TensorFlow.NET, direct TFLite interpreter might not be fully mature.
-                    // Assuming conversion to TF graph or that TensorFlow.NET has a TFLite graph loading mechanism.
-                    // This part needs verification against the current state of TensorFlow.NET for TFLite.
-                    // For now, let's assume TFLite models are loaded as frozen graphs if TensorFlow.NET supports it.
-                    _graph.Import(modelBytes); // This is a guess for TFLite, might need specific TFLite APIs.
-                    _logger.LogInformation("TensorFlow Lite model {ModelName} graph definition loaded (assuming frozen graph format).", model.Name);
-                }
-                else // SavedModel format
-                {
-                    // Loading SavedModel typically involves loading a directory.
-                    // If 'modelBytes' is a .pb file (frozen graph), this is simpler.
-                    // If it's a full SavedModel, ModelFileLoader would need to provide a path to the extracted directory.
-                    // For simplicity, assuming `model.StorageReference` points to a .pb file for frozen graph
-                    // or ModelFileLoader handles SavedModel directory structure.
-                    // The `modelBytes` would typically be from a frozen graph .pb file.
-
-                    // If _modelFileLoader gives a path to a SavedModel directory:
-                    // var sm = SavedModelLoader.load(model.StorageReference, sess); // TensorFlow.NET API may vary
-                    // _graph = sm.Graph;
-                    // _session = sm.Session; // Or use the existing session
-
-                    // If modelBytes is a .pb file (frozen graph):
-                    _graph.Import(modelBytes);
-                    _logger.LogInformation("TensorFlow SavedModel/frozen graph {ModelName} graph definition loaded.", model.Name);
-                }
-
-                // Log input/output nodes if discoverable
-                // foreach (var op in _graph.get_operations()) { _logger.LogDebug($"Op: {op.name}"); }
-
+                _logger.LogInformation("TensorFlow model {ModelName} version {ModelVersion} loaded conceptually.", model.Name, model.Version);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error loading TensorFlow model {ModelName} from {StorageReference}", model.Name, model.StorageReference);
+                _logger.LogError(ex, "Error loading TensorFlow model {ModelName} version {ModelVersion}.", model.Name, model.Version);
                 throw;
             }
         }
 
         public Task<ModelOutput> ExecuteAsync(ModelInput input)
         {
-            if (_session == null || _graph == null)
+            if ((_tfModel == null /* && _session == null && _tfliteInterpreter == null */)) // Check based on what's loaded
             {
-                _logger.LogError("TensorFlow model session/graph is not initialized. Load the model first.");
-                throw new InvalidOperationException("Model not loaded. Call LoadModelAsync first.");
+                _logger.LogError("TensorFlow model is not loaded. Call LoadModelAsync first.");
+                throw new InvalidOperationException("Model is not loaded.");
             }
-
             if (input == null)
                 throw new ArgumentNullException(nameof(input));
 
-            _logger.LogDebug("Executing TensorFlow model {ModelName} with input.", _modelDetails.Name);
+            _logger.LogDebug("Executing TensorFlow model {ModelName} version {ModelVersion}.", _modelDetails.Name, _modelDetails.Version);
 
             try
             {
-                var feedDict = new FeedItem[_modelDetails.InputSchema.Features.Count];
-                int i = 0;
-
-                // Requires _modelDetails.InputSchema to map input.Features to tensor names and shapes.
-                // Example: _modelDetails.InputSchema.Features might be a list of { Name, DataType, Shape }
-                foreach (var schemaFeature in _modelDetails.InputSchema.Features)
-                {
-                    if (!input.Features.TryGetValue(schemaFeature.Name, out var featureValue))
-                    {
-                        _logger.LogError("Input feature '{FeatureName}' defined in schema not found in ModelInput.", schemaFeature.Name);
-                        throw new ArgumentException($"Missing input feature: {schemaFeature.Name}");
-                    }
-
-                    // This is highly dependent on the specific model's input tensor names and types
-                    // Assuming schemaFeature.Name corresponds to the tensor name (e.g., "input_1:0")
-                    var inputTensor = _graph.OperationByName(schemaFeature.TensorName ?? schemaFeature.Name); // Or _graph.get_tensor_by_name(...)
-                    if (inputTensor == null)
-                    {
-                        _logger.LogError("Could not find input tensor '{TensorName}' in the graph.", schemaFeature.TensorName ?? schemaFeature.Name);
-                        throw new InvalidOperationException($"Input tensor '{schemaFeature.TensorName ?? schemaFeature.Name}' not found.");
-                    }
-                    
-                    // Convert featureValue to NDArray based on schemaFeature.DataType and schemaFeature.Shape
-                    // Simplified example assuming float[] input for a tensor expecting floats
-                    if (featureValue is float[] floatArray)
-                    {
-                        // Shape needs to come from schemaFeature.Shape, e.g., {1, 224, 224, 3}
-                        // For simplicity, assuming shape is correctly provided or inferred.
-                        var ndArray = np.array(floatArray).reshape(schemaFeature.Shape.Select(s => (int)s).ToArray()); // Ensure shape matches
-                        feedDict[i++] = new FeedItem(inputTensor, ndArray);
-                    }
-                    // Add more type conversions (int[], double[], etc.) and shape handling
-                    else
-                    {
-                        _logger.LogError("Unsupported input type for feature '{FeatureName}': {FeatureType}", schemaFeature.Name, featureValue.GetType().Name);
-                        throw new NotSupportedException($"Input type {featureValue.GetType().Name} for feature '{schemaFeature.Name}' is not supported.");
-                    }
-                }
-
-                // Fetch operations also need to be defined, e.g., from _modelDetails.OutputSchema
-                var fetchOps = _modelDetails.OutputSchema.Features
-                                .Select(f => _graph.OperationByName(f.TensorName ?? f.Name)) // Or _graph.get_tensor_by_name(...)
-                                .Where(op => op != null)
-                                .ToArray();
-
-                if(fetchOps.Length != _modelDetails.OutputSchema.Features.Count)
-                {
-                    _logger.LogError("One or more output tensors defined in schema could not be found in the graph.");
-                    throw new InvalidOperationException("Mismatch between output schema and graph output tensors.");
-                }
-
-                var results = _session.run(fetchOps, feed_dict: feedDict.ToDictionary(fd => fd.Key, fd => fd.Value)); // TensorFlow.NET API might vary for feed_dict
-
                 var outputData = new Dictionary<string, object>();
-                for(int j=0; j < results.Length; j++)
+                
+                // Input preparation: Convert ModelInput.Features to Tensors
+                // This is highly dependent on ModelInput structure and model's expected input signatures.
+                // AiModel.InputSchema should guide this.
+                // Example:
+                // var tensors = new Dictionary<string, Tensor>();
+                // foreach (var feature in input.Features)
+                // {
+                //     // Convert feature.Value to Tensor (e.g., new Tensor(floatArray), new Tensor(intArray))
+                //     // Handle shapes and types based on InputSchema
+                //     tensors[feature.Key] = CreateTensorFromFeature(feature.Value, _modelDetails.InputSchema, feature.Key);
+                // }
+
+                // Execution:
+                if (_modelDetails.ModelFormat == ModelFormat.TensorFlowLite)
                 {
-                    var outputSchemaFeature = _modelDetails.OutputSchema.Features[j];
-                    var resultNdArray = results[j]; // This is an NDArray
-
-                    // Convert NDArray to a more usable format, e.g., float[], object[,]
-                    // This depends on the structure of the NDArray (shape, dtype)
-                    // For simplicity, converting to a flat array or multidimensional array of a common type.
-                    if (resultNdArray.dtype == TF_DataType.TF_FLOAT)
-                    {
-                        outputData[outputSchemaFeature.Name] = resultNdArray.ToArray<float>();
-                    }
-                    else if (resultNdArray.dtype == TF_DataType.TF_INT32)
-                    {
-                        outputData[outputSchemaFeature.Name] = resultNdArray.ToArray<int>();
-                    }
-                    // Add other dtype conversions
-                    else
-                    {
-                         outputData[outputSchemaFeature.Name] = resultNdArray.numpy(); // Or some other generic representation
-                        _logger.LogWarning("Unhandled TensorFlow output dtype for {OutputName}: {Dtype}", outputSchemaFeature.Name, resultNdArray.dtype);
-                    }
+                    // _tfliteInterpreter.SetTensor(inputTensorIndex, inputData);
+                    // _tfliteInterpreter.Invoke();
+                    // var output = _tfliteInterpreter.GetTensor(outputTensorIndex);
+                    // Convert output tensor to .NET type
+                    _logger.LogWarning("TFLite execution via TensorFlow.NET is illustrative.");
+                    throw new NotImplementedException("TFLite execution needs specific TFLite bindings.");
                 }
+                else if (_tfModel != null) // Assuming Keras-like model or TF2 ConcreteFunction
+                {
+                    // var result = _tfModel.predict(preparedInputs); // or _tfModel.Apply(preparedInputs)
+                    // if result is a Tensor or list/dict of Tensors:
+                    // foreach (var item in result) { outputData[itemName] = ConvertTensorToDotNetType(item); }
+                    _logger.LogWarning("TensorFlow.NET Keras/TF2 model execution placeholder.");
+                    throw new NotImplementedException("Actual TensorFlow.NET model execution needs specific implementation.");
+                }
+                // else if (_session != null) // TF1 style
+                // {
+                //     var runner = _session.GetRunner();
+                //     foreach(var tensorPair in tensors) runner.AddInput(graph.OperationByName(tensorPair.Key), tensorPair.Value);
+                //     // foreach(var outputName in outputNames) runner.Fetch(graph.OperationByName(outputName));
+                //     var results = runner.Run(); // Returns NDArray[] or similar
+                //     // Convert results to outputData
+                // }
 
-                _logger.LogDebug("TensorFlow model {ModelName} execution completed.", _modelDetails.Name);
-                return Task.FromResult(new ModelOutput { Outputs = outputData, RawOutput = results });
 
+                var modelOutput = new ModelOutput { Predictions = outputData };
+                _logger.LogDebug("TensorFlow model execution completed conceptually.");
+                return Task.FromResult(modelOutput);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error executing TensorFlow model {ModelName}", _modelDetails.Name);
+                _logger.LogError(ex, "Error executing TensorFlow model {ModelName} version {ModelVersion}.", _modelDetails.Name, _modelDetails.Version);
                 throw;
             }
         }
-
-
+        
         public void Dispose()
         {
-            _session?.close();
-            _session?.Dispose();
-            _graph?.Dispose();
-            GC.SuppressFinalize(this);
+            // Dispose TensorFlow resources if necessary
+            // (_tfModel as IDisposable)?.Dispose();
+            // _session?.Dispose();
+            // _tfliteInterpreter?.Dispose();
+            _logger.LogInformation("TensorFlowExecutionEngine Dispose called.");
         }
     }
 }

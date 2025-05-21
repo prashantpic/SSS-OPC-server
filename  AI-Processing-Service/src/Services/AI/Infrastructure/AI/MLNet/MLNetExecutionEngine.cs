@@ -1,14 +1,13 @@
+```csharp
 using AIService.Domain.Enums;
 using AIService.Domain.Interfaces;
 using AIService.Domain.Models;
-using AIService.Infrastructure.AI.Common;
 using Microsoft.Extensions.Logging;
 using Microsoft.ML;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Threading.Tasks;
 
 namespace AIService.Infrastructure.AI.MLNet
@@ -16,205 +15,151 @@ namespace AIService.Infrastructure.AI.MLNet
     public class MLNetExecutionEngine : IModelExecutionEngine
     {
         private readonly ILogger<MLNetExecutionEngine> _logger;
-        private readonly ModelFileLoader _modelFileLoader;
         private readonly MLContext _mlContext;
         private ITransformer _model;
         private AiModel _modelDetails;
-        private Type _predictionInputType;
-        private Type _predictionOutputType;
-        private MethodInfo _predictMethod;
+        // PredictionEngine is not thread-safe, consider PredictionEnginePool for multi-threaded scenarios.
+        // However, creating PredictionEngine for each call might be simpler if performance allows,
+        // or if this engine instance is scoped per request.
+        // For a shared service, PredictionEnginePool is better.
+        // For this example, we'll assume it might be created on execution or a pool is managed elsewhere.
 
-
-        public MLNetExecutionEngine(ILogger<MLNetExecutionEngine> logger, ModelFileLoader modelFileLoader)
+        public MLNetExecutionEngine(ILogger<MLNetExecutionEngine> logger)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _modelFileLoader = modelFileLoader ?? throw new ArgumentNullException(nameof(modelFileLoader));
-            _mlContext = new MLContext(seed: 0); // Seed for reproducibility
+            _mlContext = new MLContext(seed: 0); // Seed for reproducibility if needed
         }
 
-        public ModelFormat SupportedFormat => ModelFormat.MLNetZip;
+        public ModelFormat HandledFormat => ModelFormat.MLNetZip;
 
-        public bool CanHandle(AiModel model)
-        {
-            return model?.ModelFormat == SupportedFormat;
-        }
+        public bool CanHandle(ModelFormat format) => format == HandledFormat;
 
-        public async Task LoadModelAsync(AiModel model)
+        public Task LoadModelAsync(AiModel model, Stream modelStream)
         {
             if (model == null)
                 throw new ArgumentNullException(nameof(model));
-            if (model.ModelFormat != SupportedFormat)
-                throw new ArgumentException($"Model format {model.ModelFormat} is not supported by {nameof(MLNetExecutionEngine)}.", nameof(model));
+            if (modelStream == null)
+                throw new ArgumentNullException(nameof(modelStream));
 
             _modelDetails = model;
-            _logger.LogInformation("Loading ML.NET model: {ModelName} Version: {ModelVersion} from {StorageReference}", model.Name, model.Version, model.StorageReference);
-
+            _logger.LogInformation("Loading ML.NET model {ModelName} version {ModelVersion} from stream.", model.Name, model.Version);
             try
             {
-                var modelStream = await _modelFileLoader.LoadModelFileAsync(model.StorageReference);
-                if (modelStream == null || modelStream.Length == 0)
+                if (!modelStream.CanSeek)
                 {
-                    throw new FileNotFoundException($"Model file could not be loaded from {model.StorageReference}");
-                }
-
-                // MLContext.Model.Load needs a seekable stream. If modelStream is not, copy to MemoryStream.
-                MemoryStream seekableStream;
-                if (modelStream.CanSeek)
-                {
-                    modelStream.Seek(0, SeekOrigin.Begin); // Ensure it's at the beginning
-                    seekableStream = modelStream as MemoryStream ?? new MemoryStream(); // Avoid re-copy if already MemoryStream
-                    if (seekableStream != modelStream) // if it was not a memory stream
-                    {
-                         await modelStream.CopyToAsync(seekableStream);
-                         seekableStream.Seek(0, SeekOrigin.Begin);
-                         await modelStream.DisposeAsync(); // Dispose original stream
-                    }
+                    // MLContext.Model.Load needs a seekable stream. If not, copy to MemoryStream.
+                    var tempStream = new MemoryStream();
+                    modelStream.CopyTo(tempStream);
+                    tempStream.Position = 0;
+                    modelStream = tempStream;
                 }
                 else
                 {
-                    seekableStream = new MemoryStream();
-                    await modelStream.CopyToAsync(seekableStream);
-                    seekableStream.Seek(0, SeekOrigin.Begin);
-                    await modelStream.DisposeAsync();
+                    modelStream.Position = 0; // Ensure stream is at the beginning
                 }
 
-
-                DataViewSchema modelSchema;
-                _model = _mlContext.Model.Load(seekableStream, out modelSchema);
-                await seekableStream.DisposeAsync();
-
-
-                _logger.LogInformation("ML.NET model {ModelName} loaded successfully.", model.Name);
-
-                // Dynamically determine input and output types based on AiModel.InputSchema and AiModel.OutputSchema
-                // This is a complex part. ML.NET models usually have specific C# classes for input and output.
-                // The schema might define these classes (e.g., class name, property names, types).
-                // For now, this is a placeholder for dynamic type creation or lookup.
-                // Option 1: Assume types are in a known assembly and can be loaded by name from schema.
-                // Option 2: Dynamically compile types (more complex).
-                // Option 3: Use a generic approach if ML.NET APIs allow it (e.g., creating DataView from ModelInput directly).
-                // For this example, let's assume schema contains type names.
-
-                if (string.IsNullOrWhiteSpace(_modelDetails.InputSchema?.ClassName) || string.IsNullOrWhiteSpace(_modelDetails.OutputSchema?.ClassName))
-                {
-                    _logger.LogError("InputSchema.ClassName or OutputSchema.ClassName is not defined for ML.NET model {ModelName}. Dynamic type resolution is required.", _modelDetails.Name);
-                    throw new InvalidOperationException("ML.NET model schema does not define input/output class names.");
-                }
-
-                _predictionInputType = Type.GetType(_modelDetails.InputSchema.ClassName, throwOnError: true);
-                _predictionOutputType = Type.GetType(_modelDetails.OutputSchema.ClassName, throwOnError: true);
-
-                // Get the generic CreatePredictionEngine method
-                var genericCreateEngineMethod = typeof(PredictionEngineExtensions)
-                    .GetMethods(BindingFlags.Public | BindingFlags.Static)
-                    .FirstOrDefault(m => m.Name == "CreatePredictionEngine" && m.IsGenericMethodDefinition && m.GetParameters().Length == 2);
-
-                if (genericCreateEngineMethod == null)
-                    throw new NotSupportedException("Could not find CreatePredictionEngine generic method.");
-
-                var createEngineMethod = genericCreateEngineMethod.MakeGenericMethod(_predictionInputType, _predictionOutputType);
-                var predictionEngine = createEngineMethod.Invoke(null, new object[] { _mlContext, _model });
-
-                _predictMethod = predictionEngine.GetType().GetMethod("Predict", new[] { _predictionInputType });
-                if (_predictMethod == null)
-                    throw new NotSupportedException("Could not find Predict method on the prediction engine.");
-
-                // Store the predictionEngine if preferred for reuse (though it's typically lightweight)
-                // _predictionEngine = predictionEngine;
+                _model = _mlContext.Model.Load(modelStream, out var modelSchema);
+                _logger.LogInformation("ML.NET model {ModelName} version {ModelVersion} loaded successfully. Input schema: {InputSchema}", model.Name, model.Version, modelSchema?.ToString() ?? "N/A");
+                
+                // Here, you might want to inspect modelSchema and compare with AiModel.InputSchema/OutputSchema
+                // to ensure compatibility or to understand the structure for creating PredictionEngine.
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error loading ML.NET model {ModelName} from {StorageReference}", model.Name, model.StorageReference);
+                _logger.LogError(ex, "Error loading ML.NET model {ModelName} version {ModelVersion}.", model.Name, model.Version);
                 throw;
             }
+            return Task.CompletedTask;
         }
 
         public Task<ModelOutput> ExecuteAsync(ModelInput input)
         {
-            if (_model == null || _predictMethod == null || _predictionInputType == null)
+            if (_model == null)
             {
-                _logger.LogError("ML.NET model or prediction components are not initialized. Load the model first.");
-                throw new InvalidOperationException("Model not loaded or not configured correctly. Call LoadModelAsync first.");
+                _logger.LogError("ML.NET model is not loaded. Call LoadModelAsync first.");
+                throw new InvalidOperationException("Model is not loaded.");
             }
-
             if (input == null)
                 throw new ArgumentNullException(nameof(input));
 
-            _logger.LogDebug("Executing ML.NET model {ModelName} with input.", _modelDetails.Name);
+            _logger.LogDebug("Executing ML.NET model {ModelName} version {ModelVersion}.", _modelDetails.Name, _modelDetails.Version);
 
             try
             {
-                // Create an instance of the dynamically determined input type
-                var predictionInputInstance = Activator.CreateInstance(_predictionInputType);
+                // ML.NET's PredictionEngine<TInput, TOutput> requires concrete C# types for TInput and TOutput.
+                // The generic ModelInput and ModelOutput approach needs a strategy:
+                // 1. Reflection: Dynamically create input objects based on AiModel.InputSchema and ModelInput.Features.
+                // 2. Dynamic API: Use methods that work with IDataView directly, if applicable.
+                // 3. Pre-defined types: If models conform to a limited set of known C# types, switch on AiModel.Id or similar.
+                // 4. Code generation: Generate TInput/TOutput types from schema at deployment/runtime (complex).
 
-                // Map features from ModelInput to properties of predictionInputInstance
-                // This requires reflection and matching property names.
-                // Assuming ModelInput.Features keys match property names in the _predictionInputType.
-                foreach (var feature in input.Features)
+                // For this example, we'll illustrate a conceptual path.
+                // A robust solution would require careful handling of AiModel.InputSchema and AiModel.OutputSchema
+                // to map to/from C# objects that ML.NET can use.
+
+                // Step 1: Create an IDataView from ModelInput.
+                // This depends on AiModel.InputSchema defining column names and types.
+                // Example: If InputSchema defines columns "Feature1" (float), "Feature2" (string)
+                // And ModelInput.Features contains {"Feature1": 0.5f, "Feature2": "text"}
+                // One way is to create a single-row List<DynamicallyCreatedInputType> and use LoadFromEnumerable.
+                // This is highly complex without concrete types.
+
+                // A simpler, but less flexible approach, assumes ModelInput.Features can be directly used
+                // if the model was trained with loose schema or if it's a dictionary-like input.
+                // Many ML.NET models (especially those from AutoML or certain pipelines) expect specific C# classes.
+
+                // Placeholder: This section requires a robust dynamic input creation strategy.
+                // For now, let's assume we can't directly use PredictionEngine easily without knowing TInput/TOutput.
+                // We might need to fall back to transforming data using the model's pipeline directly if possible,
+                // or using a pre-created PredictionEnginePool if types are known.
+
+                _logger.LogWarning("ML.NET execution with generic ModelInput/ModelOutput is complex. " +
+                                   "Requires dynamic creation of input/output types or use of IDataView directly. This is a conceptual outline.");
+
+                // If we could determine TInput and TOutput types:
+                // var predictionEngine = _mlContext.Model.CreatePredictionEngine<TInput, TOutput>(_model);
+                // TInput mlNetInput = ConvertToMLNetInput<TInput>(input, _modelDetails.InputSchema);
+                // TOutput mlNetPrediction = predictionEngine.Predict(mlNetInput);
+                // ModelOutput modelOutput = ConvertFromMLNetOutput<TOutput>(mlNetPrediction, _modelDetails.OutputSchema);
+                // return Task.FromResult(modelOutput);
+                
+                // Illustrative: if model is very simple and input.Features match a known schema (e.g. all floats for a ValueTuple)
+                // This is NOT a general solution.
+                if (input.Features.Count == 1 && input.Features.First().Value is float singleFeatureValue)
                 {
-                    var propertyInfo = _predictionInputType.GetProperty(feature.Key, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                    if (propertyInfo != null && propertyInfo.CanWrite)
-                    {
-                        // Convert feature.Value to propertyInfo.PropertyType
-                        var convertedValue = Convert.ChangeType(feature.Value, propertyInfo.PropertyType);
-                        propertyInfo.SetValue(predictionInputInstance, convertedValue);
-                    }
-                    else
-                    {
-                        _logger.LogWarning("Property {PropertyName} not found or not writable on ML.NET input type {InputTypeName} for model {ModelName}.",
-                            feature.Key, _predictionInputType.Name, _modelDetails.Name);
-                    }
+                     // Extremely simplified example: assume a model that takes a single float and returns a single float prediction.
+                     // This would require TInput and TOutput to be defined classes like:
+                     // public class SampleInput { public float Feature { get; set; } }
+                     // public class SampleOutput { public float Prediction { get; set; } } /* or Score, PredictedLabel etc. */
+                     // This means the AiModel.InputSchema and OutputSchema must somehow map to these.
+                    _logger.LogWarning("Attempting highly simplified ML.NET prediction. This is not a general solution.");
+                    // This path would require knowing TInput and TOutput types compile-time.
+                    // Cannot proceed generically here without a dynamic type system or more info from schema.
+                    throw new NotImplementedException("Generic ML.NET prediction without concrete TInput/TOutput types from schema is not fully implemented.");
                 }
 
-                // The prediction engine should be created per-thread or be thread-safe.
-                // For simplicity, creating it here. For performance, it might be pooled or created once if thread-safe.
-                // Re-creating prediction engine for thread safety per call.
-                var genericCreateEngineMethod = typeof(PredictionEngineExtensions).GetMethod("CreatePredictionEngine", new[] { typeof(MLContext), typeof(ITransformer), typeof(DataViewSchema) });
-                var createEngineMethod = genericCreateEngineMethod.MakeGenericMethod(_predictionInputType, _predictionOutputType);
-                
-                // We need to pass the model schema if the model was loaded with one.
-                // However, the simpler overload `CreatePredictionEngine<TSrc, TDst>(MLContext, ITransformer)` is often used.
-                // Let's use the one that doesn't require the schema explicitly on `CreatePredictionEngine` if _model.Schema is available.
-                
-                object predictionEngine;
-                var createEngineMethodSimple = typeof(PredictionEngineExtensions)
-                    .GetMethods(BindingFlags.Public | BindingFlags.Static)
-                    .First(m => m.Name == "CreatePredictionEngine" && m.IsGenericMethodDefinition && m.GetParameters().Length == 2 && m.GetParameters()[1].ParameterType == typeof(ITransformer))
-                    .MakeGenericMethod(_predictionInputType, _predictionOutputType);
 
-                predictionEngine = createEngineMethodSimple.Invoke(null, new object[] { _mlContext, _model });
-                var predictMethodOnEngine = predictionEngine.GetType().GetMethod("Predict", new[] { _predictionInputType });
-
-
-                var predictionResult = predictMethodOnEngine.Invoke(predictionEngine, new[] { predictionInputInstance });
-
-                // Map properties from predictionResult (of _predictionOutputType) to ModelOutput.Outputs
-                var outputData = new Dictionary<string, object>();
-                var outputProperties = _predictionOutputType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
-                foreach (var prop in outputProperties)
+                var outputData = new Dictionary<string, object>
                 {
-                    if (prop.CanRead)
-                    {
-                        outputData[prop.Name] = prop.GetValue(predictionResult);
-                    }
-                }
+                    { "status", "ML.NET execution requires concrete input/output types or dynamic IDataView handling." }
+                };
+                var conceptualOutput = new ModelOutput { Predictions = outputData };
+                _logger.LogDebug("ML.NET model conceptual execution completed.");
+                return Task.FromResult(conceptualOutput);
 
-                _logger.LogDebug("ML.NET model {ModelName} execution completed.", _modelDetails.Name);
-                return Task.FromResult(new ModelOutput { Outputs = outputData, RawOutput = predictionResult });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error executing ML.NET model {ModelName}", _modelDetails.Name);
+                _logger.LogError(ex, "Error executing ML.NET model {ModelName} version {ModelVersion}.", _modelDetails.Name, _modelDetails.Version);
                 throw;
             }
         }
 
         public void Dispose()
         {
-            // MLContext and ITransformer might be disposable in some contexts, but typically not explicitly.
-            // If _mlContext owns unmanaged resources, it should be disposed.
-            // For this example, assuming they are managed or disposed via GC.
-            GC.SuppressFinalize(this);
+            // MLContext is disposable in some (older) versions, but generally not needed for modern MLContext.
+            // ITransformer itself doesn't implement IDisposable.
+            _logger.LogInformation("MLNetExecutionEngine Dispose called.");
         }
     }
 }

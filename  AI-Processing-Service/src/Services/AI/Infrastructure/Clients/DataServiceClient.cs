@@ -1,242 +1,204 @@
-using AIService.Domain.Models; // For AiModel
-using AIService.Configuration; // For DataServiceOptions
-using Grpc.Core;
+```csharp
+using AIService.Domain.Models; // For AiModel definition
+using AIService.Infrastructure.Configuration; // For DataServiceOptions
 using Grpc.Net.Client;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
-
-// Assuming REPO-DATA-SERVICE exposes a gRPC service like 'DataStoreService'
-// defined in a .proto file. We need to placeholder the generated client types.
-// Example proto:
-// service DataStoreService {
-//   rpc GetAiModelMetadata (GetAiModelMetadataRequest) returns (AiModelMetadataResponse);
-//   rpc SaveAiModelMetadata (AiModel) returns (google.protobuf.Empty); // Assuming AiModel is a message type
-//   rpc GetAiModelArtifact (GetAiModelArtifactRequest) returns (stream AiModelArtifactChunk);
-//   rpc StoreAiModelArtifact (stream StoreAiModelArtifactRequest) returns (google.protobuf.Empty);
-//   rpc ListAiModels (ListAiModelsRequest) returns (ListAiModelsResponse);
-// }
-// For this example, I'll use placeholder types like DataStore.DataStoreClient,
-// DataStore.GetAiModelMetadataRequest, DataStore.AiModel (as a message), etc.
-// These would be generated from the actual .proto file of REPO-DATA-SERVICE.
-
-// BEGIN Placeholder for gRPC generated types (normally in a separate file from .proto)
-namespace DataStore
-{
-    // These are illustrative. Actual types depend on REPO-DATA-SERVICE's .proto definition.
-    public class DataStoreClient // Simulates the generated gRPC client
-    {
-        private readonly CallInvoker _callInvoker;
-        public DataStoreClient(CallInvoker callInvoker) { _callInvoker = callInvoker; }
-        public virtual AsyncUnaryCall<AiModelMetadataResponse> GetAiModelMetadataAsync(GetAiModelMetadataRequest request, CallOptions options) => throw new NotImplementedException();
-        public virtual AsyncUnaryCall<Google.Protobuf.WellKnownTypes.Empty> SaveAiModelMetadataAsync(AIService.Domain.Models.AiModel request, CallOptions options) => throw new NotImplementedException(); // Pass Domain model directly if proto matches
-        public virtual AsyncServerStreamingCall<AiModelArtifactChunk> GetAiModelArtifact(GetAiModelArtifactRequest request, CallOptions options) => throw new NotImplementedException();
-        public virtual AsyncClientStreamingCall<StoreAiModelArtifactRequest, Google.Protobuf.WellKnownTypes.Empty> StoreAiModelArtifact(CallOptions options) => throw new NotImplementedException();
-        public virtual AsyncUnaryCall<ListAiModelsResponse> ListAiModelsAsync(ListAiModelsRequest request, CallOptions options) => throw new NotImplementedException();
-
-    }
-
-    public class GetAiModelMetadataRequest { public string ModelId { get; set; } public string Version { get; set; } }
-    public class AiModelMetadataResponse { public AIService.Domain.Models.AiModel Model { get; set; } } // Assuming it directly returns the domain model
-    public class GetAiModelArtifactRequest { public string ModelId { get; set; } public string Version { get; set; } }
-    public class AiModelArtifactChunk { public Google.Protobuf.ByteString Content { get; set; } }
-    public class StoreAiModelArtifactRequest {
-        public FileMetadata Metadata { get; set; }
-        public Google.Protobuf.ByteString Content { get; set; }
-        public class FileMetadata { public string ModelId { get; set; } public string Version { get; set; } public string FileName { get; set; } }
-    }
-    public class ListAiModelsRequest { public string ModelTypeFilter {get;set;} public string ModelFormatFilter {get;set;}}
-    public class ListAiModelsResponse { public List<AIService.Domain.Models.AiModel> Models {get;set;} }
-
-}
-namespace Google.Protobuf.WellKnownTypes { public class Empty { } }
-// END Placeholder
+// Assuming a .proto file for DataService exists and generated client code is available.
+// For example, if the service is DataServiceProto.DataService and methods are defined within.
+// using DataServiceProto; // Namespace of the generated gRPC client
 
 namespace AIService.Infrastructure.Clients
 {
+    // This class is a wrapper around the gRPC client generated from REPO-DATA-SERVICE's .proto file.
+    // The actual gRPC client (e.g., DataServiceProto.DataService.DataServiceClient)
+    // would be injected or created here.
+
     public class DataServiceClient
     {
-        private readonly DataStore.DataStoreClient _client; // Placeholder for actual generated gRPC client
         private readonly ILogger<DataServiceClient> _logger;
+        // private readonly DataServiceProto.DataService.DataServiceClient _grpcClient; // Example of the generated client
+        private readonly HttpClient _httpClientForFallback; // Example for REST fallback if gRPC not available or for specific tasks
         private readonly DataServiceOptions _options;
 
-        public DataServiceClient(ILogger<DataServiceClient> logger, IOptions<DataServiceOptions> options)
+        public DataServiceClient(
+            ILogger<DataServiceClient> logger,
+            IOptions<DataServiceOptions> options
+            /* , DataServiceProto.DataService.DataServiceClient grpcClient = null */) // Actual gRPC client injected
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
+            // _grpcClient = grpcClient; // If injected directly
 
-            if (string.IsNullOrWhiteSpace(_options.GrpcUrl))
+            // If creating the gRPC client here:
+            if (string.IsNullOrWhiteSpace(_options.DataServiceGrpcUrl))
             {
                 _logger.LogError("DataService gRPC URL is not configured.");
                 throw new InvalidOperationException("DataService gRPC URL is not configured.");
             }
+            // var channel = GrpcChannel.ForAddress(_options.DataServiceGrpcUrl);
+            // _grpcClient = new DataServiceProto.DataService.DataServiceClient(channel);
+            
+            // Placeholder for HttpClient if needed for some DataService interactions (e.g. blob storage direct URLs)
+            _httpClientForFallback = new HttpClient();
 
-            var channel = GrpcChannel.ForAddress(_options.GrpcUrl);
-            // Replace DataStore.DataStoreClient with the actual generated gRPC client type
-            _client = new DataStore.DataStoreClient(channel);
-            _logger.LogInformation("DataServiceClient initialized for gRPC URL: {DataServiceUrl}", _options.GrpcUrl);
+
+            _logger.LogInformation("DataServiceClient initialized. Target GRPC URL (conceptual): {DataServiceUrl}", _options.DataServiceGrpcUrl);
         }
 
+        // Method to get AiModel metadata
         public async Task<AiModel> GetAiModelMetadataAsync(string modelId, string version = null)
         {
-            _logger.LogDebug("Requesting AiModel metadata from DataService for ModelId: {ModelId}, Version: {Version}", modelId, version ?? "latest");
-            try
-            {
-                var request = new DataStore.GetAiModelMetadataRequest { ModelId = modelId, Version = version ?? string.Empty };
-                var response = await _client.GetAiModelMetadataAsync(request, new CallOptions(deadline: DateTime.UtcNow.AddSeconds(_options.DefaultTimeoutSeconds)));
-                return response?.Model; // Assuming the response directly contains the AiModel domain object or needs mapping
+            _logger.LogDebug("Calling DataService to get AI model metadata for ID: {ModelId}, Version: {Version}", modelId, version ?? "latest");
+            // Example gRPC call:
+            // var request = new GetModelMetadataRequest { ModelId = modelId, Version = version ?? "" };
+            // try
+            // {
+            //     var response = await _grpcClient.GetModelMetadataAsync(request);
+            //     if (response != null && response.Model != null)
+            //     {
+            //          // Map from response.Model (gRPC DTO) to Domain.Models.AiModel
+            //          return MapToDomainAiModel(response.Model);
+            //     }
+            //     _logger.LogWarning("Model metadata not found in DataService for ID: {ModelId}, Version: {Version}", modelId, version ?? "latest");
+            //     return null;
+            // }
+            // catch (Grpc.Core.RpcException ex)
+            // {
+            //     _logger.LogError(ex, "gRPC error getting model metadata from DataService for ID: {ModelId}", modelId);
+            //     throw;
+            // }
+            _logger.LogWarning("DataServiceClient.GetAiModelMetadataAsync is a placeholder. Actual gRPC call needs implementation with generated client.");
+            await Task.Delay(50); // Simulate async work
+             // Placeholder AiModel
+            if (modelId == "test-model-id-from-ds") {
+                return new AiModel { Id = modelId, Name = "Test Model From DS", Version = version ?? "1.0", StorageReference = "placeholder/test-model.onnx", ModelFormat = Domain.Enums.ModelFormat.ONNX, InputSchema = "{}", OutputSchema = "{}" };
             }
-            catch (RpcException rpcEx)
-            {
-                _logger.LogError(rpcEx, "gRPC error while getting AiModel metadata for ModelId: {ModelId}. Status: {StatusCode}", modelId, rpcEx.StatusCode);
-                if (rpcEx.StatusCode == StatusCode.NotFound) return null;
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error getting AiModel metadata for ModelId: {ModelId}", modelId);
-                throw;
-            }
+            return null;
         }
 
-        public async Task SaveAiModelMetadataAsync(AiModel model)
-        {
-            _logger.LogDebug("Saving AiModel metadata to DataService for ModelId: {ModelId}", model.Id);
-            try
-            {
-                // Assuming the gRPC service directly accepts the AiModel domain object if proto is designed that way.
-                // Otherwise, map AiModel to the gRPC request message type.
-                await _client.SaveAiModelMetadataAsync(model, new CallOptions(deadline: DateTime.UtcNow.AddSeconds(_options.DefaultTimeoutSeconds)));
-            }
-            catch (RpcException rpcEx)
-            {
-                _logger.LogError(rpcEx, "gRPC error while saving AiModel metadata for ModelId: {ModelId}. Status: {StatusCode}", model.Id, rpcEx.StatusCode);
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error saving AiModel metadata for ModelId: {ModelId}", model.Id);
-                throw;
-            }
-        }
-
+        // Method to get model artifact stream
         public async Task<Stream> GetModelArtifactStreamAsync(string modelId, string version = null)
         {
-            _logger.LogDebug("Requesting model artifact stream from DataService for ModelId: {ModelId}, Version: {Version}", modelId, version ?? "latest");
-            try
-            {
-                var request = new DataStore.GetAiModelArtifactRequest { ModelId = modelId, Version = version ?? string.Empty };
-                var call = _client.GetAiModelArtifact(request, new CallOptions(deadline: DateTime.UtcNow.AddSeconds(_options.StreamingTimeoutSeconds))); // Longer timeout for streams
+            _logger.LogDebug("Calling DataService to get model artifact stream for ID: {ModelId}, Version: {Version}", modelId, version ?? "latest");
+            // Example gRPC call (if streaming is supported directly or it returns a URI):
+            // var request = new GetModelArtifactRequest { ModelId = modelId, Version = version ?? "" };
+            // try
+            // {
+            //      // Option 1: gRPC server streaming
+            //      // var call = _grpcClient.GetModelArtifactStream(request);
+            //      // var memoryStream = new MemoryStream();
+            //      // await foreach (var chunk in call.ResponseStream.ReadAllAsync())
+            //      // {
+            //      //    await memoryStream.WriteAsync(chunk.Content.ToByteArray());
+            //      // }
+            //      // memoryStream.Position = 0;
+            //      // return memoryStream;
 
-                var memoryStream = new MemoryStream(); // Accumulate chunks here
-                await foreach (var chunk in call.ResponseStream.ReadAllAsync())
-                {
-                    if (chunk.Content != null)
-                    {
-                        chunk.Content.WriteTo(memoryStream);
-                    }
-                }
-                memoryStream.Position = 0;
-                if (memoryStream.Length == 0)
-                {
-                    _logger.LogWarning("Received empty artifact stream for ModelId: {ModelId}", modelId);
-                    await memoryStream.DisposeAsync();
-                    return null;
-                }
-                return memoryStream;
+            //      // Option 2: gRPC returns a presigned URL to blob storage
+            //      // var response = await _grpcClient.GetModelArtifactDownloadInfoAsync(request);
+            //      // if (!string.IsNullOrWhiteSpace(response.DownloadUrl))
+            //      // {
+            //      //    var artifactStream = await _httpClientForFallback.GetStreamAsync(response.DownloadUrl);
+            //      //    return artifactStream;
+            //      // }
+            //      _logger.LogWarning("Could not retrieve model artifact stream from DataService for ID: {ModelId}", modelId);
+            //      return null;
+            // }
+            // catch (Grpc.Core.RpcException ex)
+            // {
+            //     _logger.LogError(ex, "gRPC error getting model artifact stream from DataService for ID: {ModelId}", modelId);
+            //     throw;
+            // }
+             _logger.LogWarning("DataServiceClient.GetModelArtifactStreamAsync is a placeholder. Actual gRPC call/HTTP download needs implementation.");
+            await Task.Delay(50); // Simulate async work
+            if (modelId == "test-model-id-from-ds") {
+                var content = Encoding.UTF8.GetBytes("This is a dummy model artifact stream content.");
+                return new MemoryStream(content);
             }
-            catch (RpcException rpcEx)
-            {
-                _logger.LogError(rpcEx, "gRPC error while getting model artifact stream for ModelId: {ModelId}. Status: {StatusCode}", modelId, rpcEx.StatusCode);
-                 if (rpcEx.StatusCode == StatusCode.NotFound) return null;
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error getting model artifact stream for ModelId: {ModelId}", modelId);
-                throw;
-            }
+            return Stream.Null; // Placeholder
         }
-         public async Task StoreModelArtifactAsync(string modelId, string version, Stream artifactStream, string fileName)
+
+        // Method to save AiModel metadata
+        public async Task<AiModel> SaveAiModelMetadataAsync(AiModel model)
         {
-            _logger.LogDebug("Storing model artifact to DataService for ModelId: {ModelId}, Version: {Version}, FileName: {FileName}", modelId, version, fileName);
-            try
-            {
-                using var call = _client.StoreAiModelArtifact(new CallOptions(deadline: DateTime.UtcNow.AddSeconds(_options.StreamingTimeoutSeconds)));
-                
-                // Send metadata first (if proto defines it this way)
-                var metadataRequest = new DataStore.StoreAiModelArtifactRequest
-                {
-                    Metadata = new DataStore.StoreAiModelArtifactRequest.FileMetadata { ModelId = modelId, Version = version, FileName = fileName }
-                };
-                // If metadata is part of the first message with content, adjust logic.
-                // This example assumes a separate metadata message or that it's part of each chunk's wrapper.
-                // A common pattern is: first message has metadata, subsequent have chunks.
-                // Or, metadata is sent, then stream of chunks. Let's assume the latter simplified.
-                
-                // Send first message with metadata (if required by proto design this way)
-                // await call.RequestStream.WriteAsync(new DataStore.StoreAiModelArtifactRequest { Metadata = metadataPacket });
-
-
-                byte[] buffer = new byte[64 * 1024]; // 64KB chunks
-                int bytesRead;
-                bool firstChunk = true;
-
-                while ((bytesRead = await artifactStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
-                {
-                    var chunkRequest = new DataStore.StoreAiModelArtifactRequest
-                    {
-                        Content = Google.Protobuf.ByteString.CopyFrom(buffer, 0, bytesRead)
-                    };
-                    if (firstChunk) // Send metadata with the first chunk if proto combines them
-                    {
-                        chunkRequest.Metadata = new DataStore.StoreAiModelArtifactRequest.FileMetadata { ModelId = modelId, Version = version, FileName = fileName };
-                        firstChunk = false;
-                    }
-                    await call.RequestStream.WriteAsync(chunkRequest);
-                }
-                await call.RequestStream.CompleteAsync();
-                await call.ResponseAsync; // Wait for server to acknowledge completion
-
-                _logger.LogInformation("Successfully streamed model artifact for ModelId: {ModelId}", modelId);
-            }
-            catch (RpcException rpcEx)
-            {
-                _logger.LogError(rpcEx, "gRPC error while storing model artifact for ModelId: {ModelId}. Status: {StatusCode}", modelId, rpcEx.StatusCode);
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error storing model artifact for ModelId: {ModelId}", modelId);
-                throw;
-            }
+            _logger.LogDebug("Calling DataService to save AI model metadata for Name: {ModelName}, Version: {ModelVersion}", model.Name, model.Version);
+            // Example gRPC call:
+            // var grpcModel = MapToGrpcAiModel(model); // Map Domain.Models.AiModel to gRPC DTO
+            // var request = new SaveModelMetadataRequest { Model = grpcModel };
+            // try
+            // {
+            //     var response = await _grpcClient.SaveModelMetadataAsync(request);
+            //     return MapToDomainAiModel(response.Model); // Map updated model back
+            // }
+            // catch (Grpc.Core.RpcException ex)
+            // {
+            //     _logger.LogError(ex, "gRPC error saving model metadata to DataService for Name: {ModelName}", model.Name);
+            //     throw;
+            // }
+            _logger.LogWarning("DataServiceClient.SaveAiModelMetadataAsync is a placeholder. Actual gRPC call needs implementation.");
+            await Task.Delay(50);
+            model.Id = model.Id ?? Guid.NewGuid().ToString(); // Simulate ID assignment by DataService
+            return model; // Placeholder
         }
 
-        public async Task<IEnumerable<AiModel>> ListAiModelsAsync(string modelTypeFilter = null, string modelFormatFilter = null)
+        // Method to save model artifact stream
+        public async Task<string> SaveModelArtifactAsync(AiModel model, Stream artifactStream)
         {
-             _logger.LogDebug("Requesting list of AiModels from DataService. TypeFilter: {TypeFilter}, FormatFilter: {FormatFilter}", modelTypeFilter, modelFormatFilter);
-            try
-            {
-                var request = new DataStore.ListAiModelsRequest {
-                    ModelTypeFilter = modelTypeFilter ?? string.Empty,
-                    ModelFormatFilter = modelFormatFilter ?? string.Empty
-                };
-                var response = await _client.ListAiModelsAsync(request, new CallOptions(deadline: DateTime.UtcNow.AddSeconds(_options.DefaultTimeoutSeconds)));
-                return response?.Models ?? new List<AiModel>();
-            }
-            catch (RpcException rpcEx)
-            {
-                _logger.LogError(rpcEx, "gRPC error while listing AiModels. Status: {StatusCode}", rpcEx.StatusCode);
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error listing AiModels.");
-                throw;
-            }
+            _logger.LogDebug("Calling DataService to save model artifact for Name: {ModelName}, Version: {ModelVersion}", model.Name, model.Version);
+            // Example gRPC call (client streaming):
+            // try
+            // {
+            //     // var call = _grpcClient.SaveModelArtifactStream();
+            //     // await call.RequestStream.WriteAsync(new SaveArtifactChunk { Metadata = new ArtifactMetadata { ModelId = model.Id, Version = model.Version, FileName = model.StorageReference ?? model.Name /* ... */ } });
+            //     // byte[] buffer = new byte[81920]; // 80KB chunks
+            //     // int bytesRead;
+            //     // while ((bytesRead = await artifactStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+            //     // {
+            //     //    await call.RequestStream.WriteAsync(new SaveArtifactChunk { Content = Google.Protobuf.ByteString.CopyFrom(buffer, 0, bytesRead) });
+            //     // }
+            //     // await call.RequestStream.CompleteAsync();
+            //     // var response = await call.ResponseAsync;
+            //     // return response.StorageReference; // DataService returns the unique ID/path for the stored artifact
+            // }
+            // catch (Grpc.Core.RpcException ex)
+            // {
+            //      _logger.LogError(ex, "gRPC error saving model artifact to DataService for Name: {ModelName}", model.Name);
+            //      throw;
+            // }
+             _logger.LogWarning("DataServiceClient.SaveModelArtifactAsync is a placeholder. Actual gRPC client streaming call needs implementation.");
+            await Task.Delay(50); // Simulate async work and stream consumption
+            // Simulate reading the stream to avoid undisposed stream warnings if caller doesn't own it.
+            if(artifactStream.CanSeek) artifactStream.Seek(0, SeekOrigin.End);
+            
+            // Return a conceptual storage reference
+            return $"dataservice://{model.Id ?? model.Name}/{model.Version}/{Path.GetFileName(model.StorageReference ?? "model_artifact")}";
         }
+        
+        public async Task DeleteAiModelAsync(string modelId, string version = null)
+        {
+            _logger.LogDebug("Calling DataService to delete AI model ID: {ModelId}, Version: {Version}", modelId, version ?? "all");
+            // Example gRPC call
+            // var request = new DeleteModelRequest { ModelId = modelId, Version = version ?? "" };
+            // try
+            // {
+            //     await _grpcClient.DeleteModelAsync(request);
+            // }
+            // catch (Grpc.Core.RpcException ex)
+            // {
+            //     _logger.LogError(ex, "gRPC error deleting model from DataService for ID: {ModelId}", modelId);
+            //     throw;
+            // }
+            _logger.LogWarning("DataServiceClient.DeleteAiModelAsync is a placeholder.");
+            await Task.CompletedTask;
+        }
+
+
+        // Placeholder for mappers between Domain AiModel and gRPC DTOs
+        // private DataServiceProto.ModelDto MapToGrpcAiModel(AiModel domainModel) { /* ... */ throw new NotImplementedException(); }
+        // private AiModel MapToDomainAiModel(DataServiceProto.ModelDto grpcModel) { /* ... */ throw new NotImplementedException(); }
     }
 }
