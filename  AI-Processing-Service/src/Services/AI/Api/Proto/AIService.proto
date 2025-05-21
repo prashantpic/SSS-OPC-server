@@ -1,0 +1,152 @@
+syntax = "proto3";
+
+option csharp_namespace = "AIService.Grpc";
+
+package aiservice;
+
+import "google/protobuf/struct.proto"; // For dynamic input/output features
+import "google/protobuf/timestamp.proto"; // For timestamps
+
+// Main AI Processing Service
+service AIService {
+  // Predictive Maintenance: REQ-7-001, REQ-7-003
+  rpc GetPrediction (PredictionRequest) returns (PredictionResponse);
+
+  // Anomaly Detection: REQ-7-008
+  rpc DetectAnomalies (AnomalyDetectionRequest) returns (AnomalyDetectionResponse);
+
+  // Natural Language Query Processing: REQ-7-013, REQ-7-014
+  rpc ProcessNlq (NlqRequest) returns (NlqResponse);
+  
+  // Edge Model Deployment: REQ-8-001
+  rpc DeployModelToEdge (EdgeDeploymentRequest) returns (EdgeDeploymentResponse);
+
+  // Model Management: REQ-7-004, REQ-DLP-024 (Upload implies MLOps registration)
+  rpc UploadModel (stream ModelUploadRequestChunk) returns (ModelUploadResponse);
+
+  // Model Feedback: REQ-7-005, REQ-7-011
+  rpc RegisterModelFeedback (ModelFeedbackRequest) returns (ModelFeedbackResponse);
+}
+
+// Predictive Maintenance Messages
+message PredictionRequest {
+  string model_id = 1; // Optional: specify a model, otherwise default might be used
+  google.protobuf.Struct input_features = 2; // Dynamic key-value pairs for features
+}
+
+message PredictionResponse {
+  string prediction_id = 1;
+  google.protobuf.Struct results = 2; // Dynamic key-value pairs for prediction results
+  string model_version_used = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// Anomaly Detection Messages
+message AnomalyDetectionRequest {
+  string model_id = 1; // Optional: specify a model
+  repeated google.protobuf.Struct data_points = 2; // List of data points (each a struct of features)
+}
+
+message AnomalyDetectionResponse {
+  repeated DetectedAnomaly anomalies = 1;
+  string model_id_used = 2;
+  string execution_id = 3;
+}
+
+message DetectedAnomaly {
+  google.protobuf.Timestamp timestamp = 1;
+  int32 severity = 2;
+  string description = 3;
+  repeated string affected_features = 4;
+  double confidence = 5;
+  double raw_score = 6;
+}
+
+// NLQ Processing Messages
+message NlqRequest {
+  string query_text = 1;
+  string user_id = 2; // Optional
+  string session_id = 3; // Optional
+  map<string, string> context_parameters = 4; // Optional
+}
+
+message NlqResponse {
+  string original_query = 1;
+  string processed_query = 2;
+  string intent = 3;
+  repeated NlqEntity entities = 4;
+  double confidence_score = 5;
+  string response_message = 6; // Direct answer if applicable
+  map<string, string> applied_aliases = 7;
+  string provider_used = 8;
+  bool fallback_applied = 9;
+}
+
+message NlqEntity {
+  string name = 1;
+  string value = 2;
+  string type = 3;
+  double confidence = 4;
+}
+
+// Edge Deployment Messages
+message EdgeDeploymentRequest {
+  string model_id = 1;
+  string model_version = 2; // Optional: specific version, otherwise latest suitable
+  repeated string target_device_ids = 3;
+  map<string, string> deployment_configuration = 4; // Optional advanced settings
+}
+
+message EdgeDeploymentResponse {
+  bool success = 1;
+  string deployment_id = 2;
+  string message = 3;
+  map<string, string> device_deployment_status = 4; // Status per device
+}
+
+// Model Upload Messages (Client Streaming for file content)
+message ModelUploadRequestChunk {
+  oneof chunk_data {
+    ModelMetadata metadata = 1; // Sent as the first chunk
+    FileChunk file_chunk = 2;   // Subsequent chunks for the file content
+  }
+}
+
+message ModelMetadata {
+  string name = 1;
+  string version = 2;
+  string description = 3;
+  string model_type = 4; // e.g., PredictiveMaintenance, AnomalyDetection
+  string model_format = 5; // e.g., ONNX, MLNetZip
+  string file_name = 6; // Original file name
+  string input_schema = 7; // JSON string
+  string output_schema = 8; // JSON string
+}
+
+message FileChunk {
+  bytes content = 1;
+}
+
+message ModelUploadResponse {
+  bool success = 1;
+  string model_id = 2;
+  string message = 3;
+}
+
+// Model Feedback Messages
+message ModelFeedbackRequest {
+  string model_id = 1;
+  string model_version = 2;
+  string prediction_id = 3; // Optional: if feedback is for a specific prediction
+  google.protobuf.Struct input_features = 4; // Features that led to the prediction
+  google.protobuf.Struct actual_outcome = 5; // Corrected or actual outcome
+  string feedback_text = 6;
+  bool is_correct_prediction = 7; // Optional: Simple true/false
+  string user_id = 8; // Optional
+  google.protobuf.Timestamp timestamp = 9;
+}
+
+message ModelFeedbackResponse {
+  bool success = 1;
+  string message = 2;
+}
