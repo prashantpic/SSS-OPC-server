@@ -1,51 +1,62 @@
 {
-  "Description": "Maps internal OPC data structure to SamplePlatform IoT message format.",
-  "SourceFormat": "GenericOpcData",
-  "TargetFormat": "IoTDataMessage_SamplePlatform",
-  "Version": "1.0.1",
-  "Rules": [
+  "mappingId": "SamplePlatformMapping_v1",
+  "description": "Mapping rules for Sample IoT Platform.",
+  "rules": [
     {
-      "SourceField": "TagId",
-      "TargetField": "deviceId",
-      "Transformation": null,
-      "Description": "Directly map OPC TagId to platform's deviceId field."
+      "sourcePath": "$.OPCServer1.Boiler.Temperature",
+      "targetPath": "$.deviceData.temperature_celsius",
+      "dataType": "float",
+      "transformation": null,
+      "defaultValue": null
     },
     {
-      "SourceField": "Value",
-      "TargetField": "payload.value",
-      "Transformation": {
-        "Type": "ScaleAndOffset",
-        "ScaleFactor": 1.0,
-        "Offset": 0.0
+      "sourcePath": "$.OPCServer1.Boiler.Pressure",
+      "targetPath": "$.deviceData.pressure_bar",
+      "dataType": "float",
+      "transformation": {
+        "type": "multiply",
+        "factor": 0.01 
       },
-      "Description": "Map OPC Value to payload.value, optionally apply scaling/offset."
+      "defaultValue": 0.0
     },
     {
-      "SourceField": "Timestamp",
-      "TargetField": "timestamp",
-      "Transformation": {
-        "Type": "FormatDateTime",
-        "FormatString": "o" 
-      },
-      "Description": "Map OPC Timestamp to platform's timestamp, ensure ISO 8601 format."
+      "sourcePath": "$.OPCServer1.Conveyor.IsRunning",
+      "targetPath": "$.deviceStatus.isRunning",
+      "dataType": "boolean",
+      "transformation": null,
+      "defaultValue": false
     },
     {
-      "SourceField": "Quality",
-      "TargetField": "payload.quality",
-      "Transformation": null,
-      "Description": "Map OPC Quality to payload.quality."
+      "sourcePath": "$.OPCServer1.Robot.ErrorCode",
+      "targetPath": "$.alerts.robot_error_code",
+      "dataType": "integer",
+      "transformation": null,
+      "condition": {
+        "sourcePath": "$.OPCServer1.Robot.ErrorCode",
+        "operator": "!=",
+        "value": 0
+      }
     },
     {
-      "SourceField": "SourceApplication", 
-      "TargetField": "metadata.sourceApp",
-      "Transformation": null,
-      "Description": "Map an internal source application identifier to metadata."
+      "sourcePath": "$.EventTimestamp",
+      "targetPath": "$.timestamp_utc",
+      "dataType": "datetime",
+      "transformation": {
+        "type": "format",
+        "formatString": "yyyy-MM-ddTHH:mm:ssZ"
+      }
     },
     {
-      "ConstantValue": "telemetry",
-      "TargetField": "messageType",
-      "Description": "Set a constant value for messageType."
+      "sourcePath": "$.DeviceId",
+      "targetPath": "$.deviceId",
+      "dataType": "string"
     }
   ],
-  "Notes": "This is a sample mapping. Actual fields and transformations will depend on the source OPC data structure and the target IoT platform's schema requirements. The DataMappingService will interpret these rules."
+  "globalTransformations": [
+    {
+      "type": "addMetadata",
+      "key": "dataVersion",
+      "value": "1.2"
+    }
+  ]
 }

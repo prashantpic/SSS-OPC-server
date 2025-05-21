@@ -1,173 +1,198 @@
-using IntegrationService.Adapters.IoT.Models;
-using IntegrationService.Configuration;
-using IntegrationService.Interfaces;
-using IntegrationService.Resiliency;
-using Microsoft.Extensions.Logging;
-using Polly;
-using Polly.Retry;
-using Polly.CircuitBreaker;
-
 using System;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
+using IntegrationService.Adapters.IoT.Models;
+using IntegrationService.Configuration;
+using IntegrationService.Interfaces;
+using IntegrationService.Resiliency;
+using Microsoft.Extensions.Logging;
+using Polly.CircuitBreaker;
+using Polly.Retry;
 
 namespace IntegrationService.Adapters.IoT
 {
-    /// <summary>
-    /// IoT Platform adaptor using HTTP/HTTPS protocol.
-    /// </summary>
-    public class HttpIoTAdaptor : IIoTPlatformAdaptor, IDisposable
+    public class HttpIoTAdaptor : IIoTPlatformAdaptor
     {
-        public string Id { get; }
-        private readonly ILogger<HttpIoTAdaptor> _logger;
-        private readonly ICredentialManager _credentialManager;
         private readonly IoTPlatformConfig _config;
+        private readonly ILogger<HttpIoTAdaptor> _logger;
         private readonly HttpClient _httpClient;
-        private readonly RetryPolicy _retryPolicy;
-        private readonly CircuitBreakerPolicy _circuitBreakerPolicy;
+        private readonly AsyncRetryPolicy<HttpResponseMessage> _retryPolicy;
+        private readonly AsyncCircuitBreakerPolicy<HttpResponseMessage> _circuitBreakerPolicy;
+        // private Func<IoTCommand, CancellationToken, Task> _onCommandReceived; // Webhook based command reception is complex for a generic adapter
 
-        public bool IsConnected => true; 
+        public string PlatformType => "HTTP";
+        public string PlatformId => _config.Id;
 
         public HttpIoTAdaptor(
             IoTPlatformConfig config,
             ILogger<HttpIoTAdaptor> logger,
-            ICredentialManager credentialManager,
-            IHttpClientFactory httpClientFactory, 
+            HttpClient httpClient, // Should be managed by HttpClientFactory
             RetryPolicyFactory retryPolicyFactory,
             CircuitBreakerPolicyFactory circuitBreakerPolicyFactory)
         {
-            Id = config.Id;
-            _config = config;
-            _logger = logger;
-            _credentialManager = credentialManager;
-            _httpClient = httpClientFactory.CreateClient(Id); 
-            _retryPolicy = retryPolicyFactory.GetDefaultRetryPolicy(); 
-            _circuitBreakerPolicy = circuitBreakerPolicyFactory.GetDefaultCircuitBreakerPolicy(); 
-
-            _httpClient.BaseAddress = new Uri(_config.Endpoint);
-            _httpClient.Timeout = TimeSpan.FromSeconds(30); 
-
-            _logger.LogInformation("HttpIoTAdaptor '{Id}' initialized for endpoint {Endpoint}", Id, _config.Endpoint);
+            _config = config ?? throw new ArgumentNullException(nameof(config));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+            
+            _retryPolicy = retryPolicyFactory.CreateAsyncHttpResponseRetryPolicy(3, TimeSpan.FromSeconds(2));
+            _circuitBreakerPolicy = circuitBreakerPolicyFactory.CreateAsyncHttpResponseCircuitBreakerPolicy(5, TimeSpan.FromSeconds(30));
         }
 
-        public Task ConnectAsync()
+        public Task ConnectAsync(CancellationToken cancellationToken)
         {
-             _logger.LogInformation("HttpIoTAdaptor '{Id}' ConnectAsync (HTTP is stateless, no explicit connection).", Id);
+            // For HTTP, "connection" is typically per-request.
+            // We can check base URI and auth setup here if needed.
+            if (string.IsNullOrEmpty(_config.Endpoint))
+            {
+                _logger.LogError("HTTP endpoint for platform {PlatformId} is not configured.", _config.Id);
+                throw new InvalidOperationException($"Endpoint not configured for HTTP IoT platform {_config.Id}");
+            }
+            _logger.LogInformation("HTTP IoT Adaptor for platform {PlatformId} initialized with endpoint {Endpoint}.", _config.Id, _config.Endpoint);
+            // Potentially pre-configure HttpClient base address and default headers if not done by factory
+            // _httpClient.BaseAddress = new Uri(_config.Endpoint);
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken)
         {
-             _logger.LogInformation("HttpIoTAdaptor '{Id}' DisconnectAsync (HTTP is stateless, no explicit disconnect).", Id);
+            // HTTP is stateless, so no explicit disconnect needed beyond disposing HttpClient if owned by this class (typically not).
+            _logger.LogInformation("HTTP IoT Adaptor for platform {PlatformId} 'disconnected' (stateless operation).", _config.Id);
             return Task.CompletedTask;
         }
 
-        public async Task SendTelemetryAsync(IoTDataMessage message)
+        public async Task PublishTelemetryAsync(IoTDataMessage message, CancellationToken cancellationToken)
         {
-             _logger.LogDebug("Sending telemetry for device {DeviceId} via HttpIoTAdaptor '{Id}' to {Endpoint}", message.DeviceId, Id, _config.Endpoint);
+            var telemetryEndpoint = _config.Properties.GetValueOrDefault("TelemetryEndpoint") ?? ""; // e.g., "/api/telemetry" or full URL if _config.Endpoint is just base
+            var requestUri = new Uri(new Uri(_config.Endpoint), telemetryEndpoint); // Combine base and relative
 
-            string stringPayload;
-            string contentType;
+            var payload = JsonSerializer.Serialize(message.Payload);
+            var httpContent = new StringContent(payload, Encoding.UTF8, "application/json");
 
+            // Apply authentication if configured
+            if (_config.Authentication?.Type.Equals("ApiKey", StringComparison.OrdinalIgnoreCase) == true &&
+                _config.Authentication.Properties.TryGetValue("ApiKeyHeaderName", out var headerName) &&
+                _config.Authentication.Properties.TryGetValue("ApiKeyValue", out var keyValue)) // Real app: use ICredentialManager
+            {
+                _httpClient.DefaultRequestHeaders.TryAddWithoutValidation(headerName, keyValue);
+            }
+            // Add other auth types like Bearer token
+
+            _logger.LogDebug("Publishing telemetry to HTTP endpoint {RequestUri} for platform {PlatformId}.", requestUri, _config.Id);
+
+            HttpResponseMessage response = null;
             try
             {
-                if (_config.DataFormat.Equals("JSON", StringComparison.OrdinalIgnoreCase))
+                // Combine policies: retry wraps circuit breaker
+                response = await _retryPolicy.ExecuteAsync(ct => 
+                    _circuitBreakerPolicy.ExecuteAsync(async token => 
+                    {
+                        // Create HttpRequestMessage to allow configuring method (POST/PUT) per call
+                        var request = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = httpContent };
+                        return await _httpClient.SendAsync(request, token);
+                    }, ct), 
+                cancellationToken);
+
+                if (!response.IsSuccessStatusCode)
                 {
-                    stringPayload = JsonSerializer.Serialize(message); 
-                    contentType = "application/json";
-                     _logger.LogTrace("Serialized JSON payload for device {DeviceId}: {JsonPayload}", message.DeviceId, stringPayload);
+                    var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
+                    _logger.LogError("Failed to publish telemetry to HTTP platform {PlatformId}. Status: {StatusCode}, Response: {ErrorContent}", 
+                        _config.Id, response.StatusCode, errorContent);
+                    response.EnsureSuccessStatusCode(); // Throws HttpRequestException
                 }
-                else
-                {
-                     _logger.LogError("Unsupported data format '{DataFormat}' for sending HTTP telemetry on '{Id}'.", _config.DataFormat, Id);
-                    throw new System.NotSupportedException($"Unsupported data format: {_config.DataFormat}");
-                }
+                _logger.LogInformation("Successfully published telemetry to HTTP platform {PlatformId}. Status: {StatusCode}", _config.Id, response.StatusCode);
+            }
+            catch (BrokenCircuitException bce)
+            {
+                _logger.LogError(bce, "Circuit breaker open. Failed to publish telemetry to HTTP platform {PlatformId}.", _config.Id);
+                throw;
+            }
+            catch (HttpRequestException httpEx)
+            {
+                _logger.LogError(httpEx, "HTTP error publishing telemetry to platform {PlatformId}.", _config.Id);
+                throw; // Rethrow to indicate failure
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to serialize telemetry message for device {DeviceId} using format {DataFormat}.", message.DeviceId, _config.DataFormat);
-                throw; 
+                _logger.LogError(ex, "Unexpected error publishing telemetry to HTTP platform {PlatformId}.", _config.Id);
+                throw;
             }
+            finally
+            {
+                response?.Dispose();
+            }
+        }
 
-            var request = new HttpRequestMessage(HttpMethod.Post, ""); 
-            request.Content = new StringContent(stringPayload, Encoding.UTF8, contentType);
-            await ApplyAuthenticationHeadersAsync(request.Headers);
+        public Task SubscribeToCommandsAsync(Func<IoTCommand, CancellationToken, Task> onCommandReceived, CancellationToken cancellationToken)
+        {
+            // _onCommandReceived = onCommandReceived;
+            _logger.LogWarning("Subscribing to commands via generic HTTP GET/POST is not typically supported for real-time bi-directional IoT without platform-specific mechanisms like WebSockets, long polling, or webhooks. Platform {PlatformId} might require a specific implementation or webhook registration.", _config.Id);
+            // If a platform supports command retrieval via polling, it could be implemented here.
+            // Otherwise, this adapter might only support outbound communication.
+            // A webhook setup would mean this service needs an inbound HTTP endpoint, not handled by this adapter directly.
+            return Task.CompletedTask; // Or throw NotImplementedException
+        }
 
+        public async Task SendIoTCommandResponseAsync(IoTCommandResponse response, CancellationToken cancellationToken)
+        {
+            // This assumes there's an HTTP endpoint to post command responses to.
+            var responseEndpoint = _config.Properties.GetValueOrDefault("CommandResponseEndpoint")?.Replace("{CommandId}", response.CommandId) ?? "";
+            if (string.IsNullOrEmpty(responseEndpoint))
+            {
+                _logger.LogWarning("CommandResponseEndpoint not configured for HTTP IoT platform {PlatformId}. Cannot send command response.", _config.Id);
+                throw new InvalidOperationException("CommandResponseEndpoint not configured.");
+            }
+            var requestUri = new Uri(new Uri(_config.Endpoint), responseEndpoint);
+
+            var payload = JsonSerializer.Serialize(response.Payload);
+            var httpContent = new StringContent(payload, Encoding.UTF8, "application/json");
+            
+            // Apply authentication (similar to PublishTelemetryAsync)
+
+            _logger.LogDebug("Sending command response to HTTP endpoint {RequestUri} for platform {PlatformId}.", requestUri, _config.Id);
+            
+            HttpResponseMessage httpResponse = null;
             try
             {
-                 await _retryPolicy.ExecuteAsync(() =>
-                    _circuitBreakerPolicy.ExecuteAsync(async () =>
+                 httpResponse = await _retryPolicy.ExecuteAsync(ct => 
+                    _circuitBreakerPolicy.ExecuteAsync(async token => 
                     {
-                         _logger.LogDebug("Sending HTTP POST telemetry for device {DeviceId} via '{Id}'...", message.DeviceId, Id);
-                        var response = await _httpClient.SendAsync(request);
-                        response.EnsureSuccessStatusCode(); 
-                         _logger.LogTrace("Successfully sent HTTP telemetry for device {DeviceId} via '{Id}'. Status: {StatusCode}", message.DeviceId, Id, response.StatusCode);
-                    }));
+                        var request = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = httpContent };
+                        return await _httpClient.SendAsync(request, token);
+                    }, ct), 
+                cancellationToken);
+
+                if (!httpResponse.IsSuccessStatusCode)
+                {
+                    var errorContent = await httpResponse.Content.ReadAsStringAsync(cancellationToken);
+                    _logger.LogError("Failed to send command response to HTTP platform {PlatformId}. Status: {StatusCode}, Response: {ErrorContent}", 
+                        _config.Id, httpResponse.StatusCode, errorContent);
+                    httpResponse.EnsureSuccessStatusCode();
+                }
+                 _logger.LogInformation("Successfully sent command response to HTTP platform {PlatformId}. Status: {StatusCode}", _config.Id, httpResponse.StatusCode);
+            }
+            catch (BrokenCircuitException bce)
+            {
+                _logger.LogError(bce, "Circuit breaker open. Failed to send command response to HTTP platform {PlatformId}.", _config.Id);
+                throw;
+            }
+            catch (HttpRequestException httpEx)
+            {
+                _logger.LogError(httpEx, "HTTP error sending command response to platform {PlatformId}.", _config.Id);
+                throw;
             }
             catch (Exception ex)
             {
-                 _logger.LogError(ex, "Failed to send HTTP telemetry for device {DeviceId} via '{Id}' after retries.", message.DeviceId, Id);
-                 throw; 
+                _logger.LogError(ex, "Unexpected error sending command response to HTTP platform {PlatformId}.", _config.Id);
+                throw;
             }
-        }
-
-        private async Task ApplyAuthenticationHeadersAsync(HttpRequestHeaders headers)
-        {
-            _logger.LogDebug("Applying authentication headers for HTTP adaptor '{Id}'. Type: {AuthType}", Id, _config.Authentication.Type);
-            switch (_config.Authentication.Type)
+            finally
             {
-                case "ApiKey":
-                    if (!string.IsNullOrEmpty(_config.Authentication.ApiKeyHeaderName) && !string.IsNullOrEmpty(_config.Authentication.CredentialKey))
-                    {
-                        var apiKey = await _credentialManager.GetCredentialAsync(_config.Authentication.CredentialKey);
-                        headers.Add(_config.Authentication.ApiKeyHeaderName, apiKey);
-                         _logger.LogTrace("Added API Key header '{HeaderName}' for '{Id}'.", _config.Authentication.ApiKeyHeaderName, Id);
-                    }
-                    break;
-                 case "BearerToken":
-                     _logger.LogWarning("Bearer token authentication placeholder for '{Id}'. Token retrieval logic needed.", Id);
-                     break;
-                case "None":
-                    break;
-                default:
-                    _logger.LogWarning("Unsupported HTTP authentication type: {AuthType}", _config.Authentication.Type);
-                    break;
+                httpResponse?.Dispose();
             }
-        }
-
-        private System.Action<IoTCommand>? _onCommandReceivedCallback;
-         public Task SubscribeToCommandsAsync(System.Action<IoTCommand> onCommandReceived)
-        {
-             if (!_config.EnableBiDirectional)
-            {
-                _logger.LogWarning("Bi-directional communication is disabled for HTTP adaptor '{Id}'. Cannot subscribe to commands via simple HTTP.", Id);
-                return Task.CompletedTask;
-            }
-
-            _logger.LogWarning("HTTP adaptor '{Id}' typically does not support direct subscriptions for incoming commands. This requires a different mechanism (e.g., polling an endpoint, WebSockets, or the platform pushing commands via a different protocol). Placeholder implementation only.", Id);
-            _onCommandReceivedCallback = onCommandReceived; 
-            return Task.CompletedTask;
-        }
-
-        public Task SendCommandResponseAsync(string commandId, object responsePayload)
-        {
-             if (!_config.EnableBiDirectional)
-            {
-                _logger.LogWarning("Bi-directional communication is disabled for HTTP adaptor '{Id}'. Cannot send command response.", Id);
-                return Task.CompletedTask;
-            }
-            _logger.LogWarning("HTTP adaptor '{Id}' typically does not support sending direct command responses unless the platform provides a specific API for it. Placeholder implementation only.", Id);
-            return Task.CompletedTask; 
-        }
-
-        public void Dispose()
-        {
-            _logger.LogInformation("Disposing HttpIoTAdaptor '{Id}'. Disposing HttpClient.", Id);
-            // HttpClient is managed by IHttpClientFactory, no explicit dispose here unless it was created manually.
-            GC.SuppressFinalize(this);
         }
     }
 }

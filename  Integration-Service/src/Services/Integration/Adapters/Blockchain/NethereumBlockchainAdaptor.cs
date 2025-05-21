@@ -1,324 +1,241 @@
+using System;
+using System.IO;
+using System.Numerics;
+using System.Threading;
+using System.Threading.Tasks;
 using IntegrationService.Adapters.Blockchain.Models;
 using IntegrationService.Configuration;
 using IntegrationService.Interfaces;
 using IntegrationService.Resiliency;
 using Microsoft.Extensions.Logging;
-using Nethereum.Hex.HexTypes;
-using Nethereum.Web3;
+using Microsoft.Extensions.Options;
 using Nethereum.Contracts;
+using Nethereum.Hex.HexTypes;
 using Nethereum.RPC.Eth.DTOs;
-using Polly;
-using Polly.Retry;
+using Nethereum.Web3;
+using Nethereum.Web3.Accounts; // For Account usage if private key is managed directly
+// For Nethereum.KeyStore if using keystore files
+// For Nethereum.HdWallet if using HD wallets
+
 using Polly.CircuitBreaker;
-using System;
-using System.IO;
-using System.Numerics;
-using System.Threading.Tasks;
+using Polly.Retry;
+
 
 namespace IntegrationService.Adapters.Blockchain
 {
-    /// <summary>
-    /// Blockchain adaptor using Nethereum library for Ethereum-compatible chains.
-    /// </summary>
-    public class NethereumBlockchainAdaptor : IBlockchainAdaptor, IDisposable
+    public class NethereumBlockchainAdaptor : IBlockchainAdaptor
     {
-        private readonly ILogger<NethereumBlockchainAdaptor> _logger;
+        private readonly BlockchainSettings _settings;
         private readonly ICredentialManager _credentialManager;
-        private readonly BlockchainSettings _config;
-        private readonly RetryPolicy _retryPolicy;
-        private readonly CircuitBreakerPolicy _circuitBreakerPolicy;
-
-        private Web3? _web3;
-        private Contract? _criticalDataLogContract;
-        private Nethereum.Web3.Accounts.Account? _account;
-        private string? _criticalDataLogAbi;
-
-        public bool IsConnected => _web3 != null && _account != null; // Simplified check
-
+        private readonly ILogger<NethereumBlockchainAdaptor> _logger;
+        private readonly AsyncRetryPolicy _retryPolicy;
+        private readonly AsyncCircuitBreakerPolicy _circuitBreakerPolicy;
+        private Web3 _web3;
+        private string _contractAbi;
+        private Account _account; // If using private key directly
 
         public NethereumBlockchainAdaptor(
-            BlockchainSettings config, // Directly inject BlockchainSettings
-            ILogger<NethereumBlockchainAdaptor> logger,
+            IOptions<BlockchainSettings> settings,
             ICredentialManager credentialManager,
+            ILogger<NethereumBlockchainAdaptor> logger,
             RetryPolicyFactory retryPolicyFactory,
             CircuitBreakerPolicyFactory circuitBreakerPolicyFactory)
         {
-            _config = config;
-            _logger = logger;
-            _credentialManager = credentialManager;
-            _retryPolicy = retryPolicyFactory.GetDefaultRetryPolicy(); 
-            _circuitBreakerPolicy = circuitBreakerPolicyFactory.GetDefaultCircuitBreakerPolicy(); 
+            _settings = settings?.Value ?? throw new ArgumentNullException(nameof(settings));
+            _credentialManager = credentialManager ?? throw new ArgumentNullException(nameof(credentialManager));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-            _logger.LogInformation("NethereumBlockchainAdaptor initialized for RPC URL {RpcUrl} and Contract {ContractAddress}", _config.RpcUrl, _config.SmartContractAddress);
+            _retryPolicy = retryPolicyFactory.CreateAsyncRetryPolicy(_settings.Resiliency?.RetryAttempts ?? 3, 
+                                                                    TimeSpan.FromSeconds(_settings.Resiliency?.RetryDelaySeconds ?? 2));
+            _circuitBreakerPolicy = circuitBreakerPolicyFactory.CreateAsyncCircuitBreakerPolicy(
+                                                                    _settings.Resiliency?.ExceptionsAllowedBeforeBreaking ?? 5, 
+                                                                    TimeSpan.FromSeconds(_settings.Resiliency?.DurationOfBreakSeconds ?? 30));
         }
 
-        public async Task ConnectAsync()
+        public async Task ConnectAsync(CancellationToken cancellationToken)
         {
-            if (IsConnected)
+            _logger.LogInformation("Connecting to blockchain RPC endpoint: {RpcUrl}", _settings.RpcUrl);
+            
+            // Retrieve private key securely
+            var privateKey = await _credentialManager.GetCredentialAsync(_settings.CredentialIdentifier, cancellationToken);
+            if (string.IsNullOrEmpty(privateKey))
             {
-                _logger.LogInformation("NethereumBlockchainAdaptor is already connected.");
-                return;
+                _logger.LogError("Private key could not be retrieved for blockchain interaction using identifier: {CredentialIdentifier}", _settings.CredentialIdentifier);
+                throw new InvalidOperationException("Blockchain private key is missing or could not be retrieved.");
             }
-             _logger.LogInformation("Connecting NethereumBlockchainAdaptor to {RpcUrl}...", _config.RpcUrl);
-
+            
             try
             {
-                await _retryPolicy.ExecuteAsync(() =>
-                    _circuitBreakerPolicy.ExecuteAsync(async () =>
-                    {
-                        // Load private key and create account
-                        var privateKey = await _credentialManager.GetCredentialAsync(_config.CredentialKey);
-                        _account = new Nethereum.Web3.Accounts.Account(privateKey, _config.ChainId);
-
-                        // Initialize Web3
-                        _web3 = new Web3(_account, _config.RpcUrl);
-                        _web3.TransactionManager.UseLegacyAsDefault = false; // For EIP-1559 support if chain uses it
-
-                        // Load ABI if not already loaded
-                        if (string.IsNullOrEmpty(_criticalDataLogAbi))
-                        {
-                            await LoadSmartContractAbiAsync();
-                        }
-
-                        // Get contract instance
-                        if (!string.IsNullOrEmpty(_criticalDataLogAbi) && !string.IsNullOrEmpty(_config.SmartContractAddress))
-                        {
-                            _criticalDataLogContract = _web3.Eth.GetContract(_criticalDataLogAbi, _config.SmartContractAddress);
-                            _logger.LogInformation("Nethereum Web3 client and contract instance initialized successfully for contract {ContractAddress}.", _config.SmartContractAddress);
-                        }
-                        else
-                        {
-                             _logger.LogError("ABI or Smart Contract Address is missing. Cannot initialize contract instance.");
-                             throw new InvalidOperationException("ABI or Smart Contract Address is missing.");
-                        }
-                        
-                        // Test connection (optional, e.g., get block number)
-                        var blockNumber = await _web3.Eth.Blocks.GetBlockNumber.SendRequestAsync();
-                        _logger.LogInformation("Successfully connected to blockchain. Current block number: {BlockNumber}", blockNumber.Value);
-
-                    }));
+                _account = new Account(privateKey, _settings.ChainId.HasValue ? new BigInteger(_settings.ChainId.Value) : null);
+                _web3 = new Web3(_account, _settings.RpcUrl);
             }
             catch (Exception ex)
             {
-                 _logger.LogError(ex, "Failed to connect NethereumBlockchainAdaptor after retries.");
-                 _web3 = null; // Ensure IsConnected reflects failure
-                 _account = null;
-                 _criticalDataLogContract = null;
-                 throw; 
-            }
-        }
-        
-        public Task DisconnectAsync()
-        {
-             _logger.LogInformation("NethereumBlockchainAdaptor Disconnect (typically no explicit disconnect needed for Web3).");
-             // Nethereum's Web3 client doesn't manage a persistent connection in the same way
-             // as MQTT or AMQP. Resources are managed per request.
-             // Resetting internal state can be done if desired.
-             // _web3 = null;
-             // _account = null;
-             // _criticalDataLogContract = null;
-            return Task.CompletedTask;
-        }
-
-
-        public async Task<string> LogCriticalDataAsync(BlockchainTransactionRequest request)
-        {
-            if (_web3 == null || _criticalDataLogContract == null || _account == null || string.IsNullOrEmpty(_criticalDataLogAbi))
-            {
-                 _logger.LogWarning("Blockchain adaptor is not initialized. Cannot log data.");
-                await ConnectAsync(); // Attempt to connect/initialize
-                if (_web3 == null || _criticalDataLogContract == null) throw new InvalidOperationException("Blockchain adaptor failed to initialize.");
-            }
-             _logger.LogDebug("Preparing to log critical data to blockchain. SourceId: {SourceId}, DataPayload Hash: {DataPayload}", request.SourceId, request.DataPayload);
-
-            // Determine which smart contract function to call
-            // Default to 'logCriticalData' if not specified
-            string functionName = !string.IsNullOrEmpty(request.FunctionName) ? request.FunctionName : "logCriticalData"; 
-            var function = _criticalDataLogContract!.GetFunction(functionName);
-
-            // Prepare transaction input
-            // Parameters must match the smart contract function signature
-            // Example: logCriticalData(string _sourceId, string _dataHash, uint256 _timestamp, string _metadata)
-            var transactionInput = new TransactionInput
-            {
-                From = _account!.Address,
-                To = _config.SmartContractAddress,
-                ChainId = new HexBigInteger(_config.ChainId),
-                // Gas and GasPrice can be estimated or set based on config
-            };
-
-            // Example parameters for "logCriticalData(string _sourceId, string _dataHash)"
-            // Adjust parameters based on the actual smart contract ABI and request.FunctionName
-            object[] functionParams;
-            if (functionName == "logCriticalData")
-            {
-                // Assuming logCriticalData(string _sourceId, string _dataHash, uint256 _timestamp, string _metadata)
-                functionParams = new object[] { request.SourceId, request.DataPayload, new BigInteger(request.Timestamp.ToUnixTimeSeconds()), request.Metadata };
-            }
-            else
-            {
-                _logger.LogError("Unsupported function name '{FunctionName}' for blockchain logging.", functionName);
-                throw new NotSupportedException($"Function '{functionName}' is not supported for logging.");
+                _logger.LogError(ex, "Failed to initialize Web3 account with private key from {CredentialIdentifier}", _settings.CredentialIdentifier);
+                throw;
             }
 
 
+            // Load ABI
+            if (!File.Exists(_settings.SmartContractAbiPath))
+            {
+                _logger.LogError("Smart contract ABI file not found at path: {SmartContractAbiPath}", _settings.SmartContractAbiPath);
+                throw new FileNotFoundException("Smart contract ABI file not found.", _settings.SmartContractAbiPath);
+            }
+            _contractAbi = await File.ReadAllTextAsync(_settings.SmartContractAbiPath, cancellationToken);
+
+            // Test connection
             try
             {
-                 return await _retryPolicy.ExecuteAsync(() =>
-                    _circuitBreakerPolicy.ExecuteAsync(async () =>
-                    {
-                        // Estimate gas price if configured
-                        if (_config.GasPriceStrategy.Equals("Standard", StringComparison.OrdinalIgnoreCase) || _config.GasPriceStrategy.Equals("Fast", StringComparison.OrdinalIgnoreCase)) {
-                            var gasPrice = await _web3.Eth.GasPrice.SendRequestAsync(); // Nethereum's default gas price estimator
-                            transactionInput.GasPrice = gasPrice;
-                             _logger.LogDebug("Estimated gas price: {GasPriceGwei} Gwei", Web3.Convert.FromWei(gasPrice.Value, Nethereum.Util.UnitConversion.EthUnit.Gwei));
-                        }
-                        
-                        // Estimate gas limit
-                        var gasLimit = await function.EstimateGasAsync(transactionInput.From, null, null, functionParams);
-                        transactionInput.Gas = gasLimit; // Nethereum uses Gas for GasLimit in TransactionInput
-                        _logger.LogDebug("Estimated gas limit: {GasLimit}", gasLimit.Value);
-
-
-                        _logger.LogInformation("Sending blockchain transaction to {SmartContractAddress} (Function: {FunctionName}) on chain {ChainId} via '{RpcUrl}'. SourceId: {SourceId}",
-                            _config.SmartContractAddress, functionName, _config.ChainId, _config.RpcUrl, request.SourceId);
-
-                        var transactionReceipt = await function.SendTransactionAndWaitForReceiptAsync(
-                            transactionInput.From, // From address
-                            transactionInput.Gas, // Gas limit
-                            transactionInput.GasPrice, // Gas price (can be null for EIP-1559 chains if MaxFeePerGas/MaxPriorityFeePerGas is set)
-                            null, // Value (for sending ETH, typically 0 for contract calls)
-                            CancellationToken.None, // CancellationToken
-                            functionParams // Function parameters
-                        );
-
-                        if (transactionReceipt.Succeeded())
-                        {
-                            _logger.LogInformation("Blockchain transaction successful. Tx Hash: {TransactionHash}, Block: {BlockNumber}",
-                                transactionReceipt.TransactionHash, transactionReceipt.BlockNumber.Value);
-                            return transactionReceipt.TransactionHash;
-                        }
-                        else
-                        {
-                            _logger.LogError("Blockchain transaction failed. Tx Hash: {TransactionHash}, Status: {Status}, Gas Used: {GasUsed}. Revert Reason (if available): {RevertReason}",
-                                transactionReceipt.TransactionHash, transactionReceipt.Status.Value, transactionReceipt.GasUsed.Value, transactionReceipt.RevertReason);
-                            throw new Exception($"Blockchain transaction failed with status {transactionReceipt.Status.Value}. Tx Hash: {transactionReceipt.TransactionHash}. Revert Reason: {transactionReceipt.RevertReason}");
-                        }
-                    }));
+                var blockNumber = await _retryPolicy.ExecuteAsync(ct => _web3.Eth.Blocks.GetBlockNumber.SendRequestAsync(), cancellationToken);
+                _logger.LogInformation("Successfully connected to blockchain. Current block number: {BlockNumber}", blockNumber.Value);
             }
             catch (Exception ex)
             {
-                 _logger.LogError(ex, "Failed to send blockchain transaction after retries. SourceId: {SourceId}", request.SourceId);
-                 throw; 
+                _logger.LogError(ex, "Failed to connect to blockchain RPC endpoint {RpcUrl} or retrieve block number.", _settings.RpcUrl);
+                throw;
             }
         }
 
-        public async Task<BlockchainRecord?> GetRecordAsync(string identifier)
+        public async Task<BlockchainRecord> LogCriticalDataAsync(BlockchainTransactionRequest request, CancellationToken cancellationToken)
         {
-            if (_web3 == null || _criticalDataLogContract == null || _account == null || string.IsNullOrEmpty(_criticalDataLogAbi))
+            if (_web3 == null || string.IsNullOrEmpty(_contractAbi))
             {
-                 _logger.LogWarning("Blockchain adaptor is not initialized. Cannot query record.");
-                await ConnectAsync(); 
-                if (_web3 == null || _criticalDataLogContract == null) throw new InvalidOperationException("Blockchain adaptor failed to initialize.");
-            }
-             _logger.LogDebug("Querying blockchain for record identifier: {Identifier}", identifier);
-
-            try
-            {
-                 var transactionHash = identifier; 
-                 _logger.LogDebug("Attempting to get transaction receipt for hash: {TransactionHash}", transactionHash);
-
-                 var receipt = await _retryPolicy.ExecuteAsync(() =>
-                    _circuitBreakerPolicy.ExecuteAsync(async () =>
-                    {
-                         var txReceipt = await _web3.Eth.Transactions.GetTransactionReceipt.SendRequestAsync(transactionHash);
-                         if (txReceipt == null) throw new Exception($"Transaction receipt not found for hash {transactionHash}.");
-                         return txReceipt;
-                    }));
-
-                 if (receipt != null && receipt.Succeeded())
+                _logger.LogWarning("Blockchain adaptor is not connected. Attempting to connect before logging data.");
+                await ConnectAsync(cancellationToken); // Ensure connection
+                 if (_web3 == null || string.IsNullOrEmpty(_contractAbi))
                  {
-                     _logger.LogDebug("Successfully retrieved transaction receipt. Parsing logs...");
-                     
-                     // Example: Assuming an event "CriticalDataLogged(string sourceId, string dataHash, uint256 timestamp, string metadata)"
-                     var eventLogs = receipt.DecodeAllEvents<CriticalDataLoggedEventDTO>(); // Define this DTO based on ABI
-                     var relevantLog = eventLogs.FirstOrDefault(); // Assuming one relevant event per transaction
-
-                     if (relevantLog != null)
-                     {
-                         // Get block timestamp
-                         var block = await _web3.Eth.Blocks.GetBlockWithTransactionsByNumber.SendRequestAsync(receipt.BlockNumber);
-                         DateTimeOffset blockTimestamp = DateTimeOffset.FromUnixTimeSeconds((long)block.Timestamp.Value);
-
-                         return new BlockchainRecord
-                         {
-                             TransactionHash = receipt.TransactionHash,
-                             BlockNumber = (ulong)receipt.BlockNumber.Value,
-                             Timestamp = blockTimestamp, 
-                             DataPayload = relevantLog.Event.DataHash, 
-                             Metadata = relevantLog.Event.Metadata 
-                         };
-                     } else {
-                          _logger.LogWarning("No 'CriticalDataLoggedEventDTO' (or similar) event found in transaction receipt {TransactionHash}.", transactionHash);
-                     }
-                     
-                     return new BlockchainRecord // Fallback with minimal info if event parsing fails
-                     {
-                         TransactionHash = receipt.TransactionHash,
-                         BlockNumber = (ulong)receipt.BlockNumber.Value,
-                         Timestamp = DateTimeOffset.UtcNow, // Placeholder, needs block lookup
-                         DataPayload = "Data from Tx Input (Not Parsed)" 
-                     };
+                    _logger.LogError("Failed to log critical data. Blockchain adaptor not connected.");
+                    throw new InvalidOperationException("Blockchain adaptor not connected.");
                  }
+            }
 
-                 _logger.LogWarning("Transaction receipt not found or transaction failed for identifier {Identifier}.", identifier);
-                 return null; 
+            _logger.LogInformation("Attempting to log critical data to blockchain. DataHash: {DataHash}, SourceId: {SourceId}", request.DataHash, request.SourceId);
 
+            var contract = _web3.Eth.GetContract(_contractAbi, _settings.SmartContractAddress);
+            
+            // Assuming a smart contract function like: logData(bytes32 dataHash, string sourceId, uint256 timestamp)
+            // Nethereum expects byte[] for bytes32, not hex string directly for function params.
+            // Hex string dataHash needs to be converted to byte[32].
+            // For simplicity, if DataHash is already a hex string like "0x...", Nethereum might handle it.
+            // If it's a raw hash, it needs padding/conversion.
+            // Let's assume request.DataHash is "0x" prefixed hex string.
+            
+            // Ensure DataHash is 32 bytes (64 hex characters + "0x")
+            byte[] dataHashBytes;
+            try 
+            {
+                // dataHashBytes = Nethereum.Hex.HexConvertors.Extensions.HexToByteArray(request.DataHash.StartsWith("0x") ? request.DataHash.Substring(2) : request.DataHash);
+                // if (dataHashBytes.Length != 32) throw new ArgumentException("DataHash must be 32 bytes.");
+                // For Nethereum contract function calls, it often handles "0x" prefixed strings for bytes32 correctly.
+                // Let's pass it as string and see if Nethereum's parameter encoder handles it. If not, explicit byte[] conversion is needed.
+            }
+            catch(Exception ex)
+            {
+                 _logger.LogError(ex, "Invalid DataHash format: {DataHash}. Must be a 32-byte hex string.", request.DataHash);
+                throw new ArgumentException("Invalid DataHash format.", nameof(request.DataHash), ex);
+            }
+
+
+            // The function name in ABI needs to match. E.g., "logData"
+            var logDataFunction = contract.GetFunction(_settings.SmartContractFunctionName ?? "logData"); 
+
+            TransactionReceipt transactionReceipt = null;
+            string transactionHash = null;
+
+            try
+            {
+                // Parameters should match the smart contract function signature
+                // Example: logData(bytes32 dataHash, string sourceId, uint timestamp)
+                // Nethereum uses object[] for parameters.
+                var functionParams = new object[]
+                {
+                    request.DataHash, // Assuming this is a string like "0x..." Nethereum can convert or pre-convert to byte[]
+                    request.SourceId,
+                    new BigInteger(request.Timestamp.ToUnixTimeSeconds()) // Convert DateTimeOffset to Unix timestamp (uint256)
+                };
+
+                if (request.SmartContractParameters != null && request.SmartContractParameters.Count > 0)
+                {
+                    // If generic parameters are provided, use them instead
+                    functionParams = request.SmartContractParameters.ToArray();
+                }
+
+
+                await _circuitBreakerPolicy.ExecuteAsync(async ct =>
+                {
+                    // Estimate gas
+                    var gasEstimate = await _retryPolicy.ExecuteAsync(token =>
+                        logDataFunction.EstimateGasAsync(_account.Address, null, null, functionParams), ct);
+
+                    var gasPrice = _settings.GasPriceGwei.HasValue 
+                        ? Web3.Convert.ToWei(_settings.GasPriceGwei.Value, Nethereum.Util.UnitConversion.EthUnit.Gwei) 
+                        : null; // Let Nethereum determine or use network default
+
+
+                    _logger.LogDebug("Sending transaction to contract {ContractAddress}, function {FunctionName}. GasEstimate: {Gas}, GasPrice: {GasPrice}",
+                        _settings.SmartContractAddress, logDataFunction.Name, gasEstimate.Value, gasPrice?.ToString() ?? "auto");
+
+                    transactionHash = await _retryPolicy.ExecuteAsync(token =>
+                        logDataFunction.SendTransactionAsync(_account.Address, gasEstimate, gasPrice, null, token, functionParams), ct);
+                    
+                    _logger.LogInformation("Transaction sent. Hash: {TransactionHash}. Waiting for receipt...", transactionHash);
+
+                    // Wait for receipt (configurable timeout)
+                    // This can take time. Consider making this part truly async / fire-and-forget with a callback or event.
+                    transactionReceipt = await _web3.Eth.Transactions.GetTransactionReceipt
+                        .SendRequestAsync(transactionHash, new CancellationTokenSource(TimeSpan.FromMinutes(2)).Token); // Add timeout
+
+                    int receiptPollCount = 0;
+                    while (transactionReceipt == null && receiptPollCount < (_settings.ReceiptPollMaxAttempts ?? 20) && !ct.IsCancellationRequested) // Max 20 polls, ~1 minute if 3s delay
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(_settings.ReceiptPollIntervalSeconds ?? 3), ct);
+                        transactionReceipt = await _web3.Eth.Transactions.GetTransactionReceipt.SendRequestAsync(transactionHash, ct);
+                        receiptPollCount++;
+                        _logger.LogDebug("Polling for transaction receipt... Attempt {Attempt}", receiptPollCount);
+                    }
+
+                    if (transactionReceipt == null)
+                    {
+                        _logger.LogError("Transaction receipt not found for hash {TransactionHash} after multiple polls.", transactionHash);
+                        throw new TimeoutException($"Transaction receipt not obtained for {transactionHash}.");
+                    }
+
+                    if (transactionReceipt.Status.Value == BigInteger.Zero) // 0 for failure, 1 for success
+                    {
+                        _logger.LogError("Blockchain transaction failed. Hash: {TransactionHash}, Status: {Status}, GasUsed: {GasUsed}, BlockNumber: {BlockNumber}",
+                            transactionHash, transactionReceipt.Status.Value, transactionReceipt.GasUsed.Value, transactionReceipt.BlockNumber.Value);
+                        // Potentially inspect logs for revert reasons if available in receipt
+                        throw new Exception($"Blockchain transaction {transactionHash} failed with status 0.");
+                    }
+
+                    _logger.LogInformation("Transaction successful. Hash: {TransactionHash}, BlockNumber: {BlockNumber}, GasUsed: {GasUsed}",
+                        transactionHash, transactionReceipt.BlockNumber.Value, transactionReceipt.GasUsed.Value);
+
+                }, cancellationToken);
+
+
+                return new BlockchainRecord
+                {
+                    TransactionHash = transactionReceipt.TransactionHash,
+                    BlockNumber = (long)transactionReceipt.BlockNumber.Value,
+                    GasUsed = (long)transactionReceipt.GasUsed.Value,
+                    Status = transactionReceipt.Status.Value == BigInteger.One ? "Success" : "Failed",
+                    Timestamp = request.Timestamp, // Or from block if preferred: await _web3.Eth.Blocks.GetBlockWithTransactionsByNumber.SendRequestAsync(transactionReceipt.BlockNumber)
+                    DataHash = request.DataHash, // Assuming DataHash is part of the request
+                    SourceId = request.SourceId   // Assuming SourceId is part of the request
+                };
+            }
+            catch (BrokenCircuitException bce)
+            {
+                _logger.LogError(bce, "Circuit breaker open. Failed to log data to blockchain.");
+                throw;
             }
             catch (Exception ex)
             {
-                 _logger.LogError(ex, "Failed to query blockchain record for identifier {Identifier} after retries.", identifier);
-                 throw; 
+                _logger.LogError(ex, "Error logging data to blockchain. TransactionHash (if available): {TransactionHash}", transactionHash ?? "N/A");
+                throw; // Rethrow to indicate failure
             }
         }
-
-         private async Task LoadSmartContractAbiAsync()
-        {
-            var abiPath = Path.Combine(AppContext.BaseDirectory, "Adapters", "Blockchain", "SmartContracts", "CriticalDataLog.abi.json");
-            if (File.Exists(abiPath))
-            {
-                _criticalDataLogAbi = await File.ReadAllTextAsync(abiPath);
-                 _logger.LogInformation("Successfully loaded smart contract ABI from {AbiPath}", abiPath);
-            }
-            else
-            {
-                 _logger.LogError("Smart contract ABI file not found at {AbiPath}.", abiPath);
-                throw new FileNotFoundException($"Smart contract ABI file not found at {abiPath}.");
-            }
-        }
-
-         public void Dispose()
-        {
-             _logger.LogInformation("NethereumBlockchainAdaptor Dispose called.");
-             GC.SuppressFinalize(this);
-        }
-    }
-
-    // Example DTO for decoding "CriticalDataLogged" event
-    // This should match the event signature in your smart contract ABI
-    [Event("CriticalDataLogged")]
-    public class CriticalDataLoggedEventDTO : IEventDTO
-    {
-        [Parameter("string", "sourceId", 1, true)] // Indexed parameters are marked true
-        public string SourceId { get; set; } = string.Empty;
-
-        [Parameter("string", "dataHash", 2, false)]
-        public string DataHash { get; set; } = string.Empty;
-
-        [Parameter("uint256", "timestamp", 3, false)]
-        public BigInteger Timestamp { get; set; }
-
-        [Parameter("string", "metadata", 4, false)]
-        public string Metadata { get; set; } = string.Empty;
     }
 }
