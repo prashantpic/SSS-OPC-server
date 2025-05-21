@@ -1,56 +1,68 @@
-using System;
 using System.Collections.Generic;
+using System;
 
-namespace OrchestrationService.Workflows.ReportGeneration
+namespace OrchestrationService.Workflows.ReportGeneration;
+
+/// <summary>
+/// Represents the stateful aggregate for an instance of the ReportGenerationSaga.
+/// Holds all persistent data, parameters, intermediate results, and current state
+/// related to a specific report generation process.
+/// </summary>
+public class ReportGenerationSagaData
 {
     /// <summary>
-    /// Represents the stateful aggregate for an instance of the ReportGenerationSaga.
-    /// Holds all persistent data, parameters, intermediate results, and current state
-    /// related to a specific report generation process.
-    /// Implements REQ-7-020, REQ-7-022.
+    /// Unique identifier for the report being generated.
     /// </summary>
-    public class ReportGenerationSagaData
-    {
-        public string ReportId { get; set; } = Guid.NewGuid().ToString();
-        public ReportGenerationSagaInput RequestParameters { get; set; } = new();
-        public ReportStatus CurrentStatus { get; set; } = ReportStatus.Initiated;
-        public string? AiAnalysisResultUri { get; set; }
-        public string? HistoricalDataRef { get; set; }
-        public string? GeneratedDocumentUri { get; set; }
-        public List<string> DistributionList { get; set; } = new(); // Populated from RequestParameters.DistributionTarget or ManagementService
-        public ReportValidationStatus ValidationStatus { get; set; } = ReportValidationStatus.Pending;
-        public string? ArchivedReportUri { get; set; }
-        public string? FailureReason { get; set; }
-        public List<string> CompensatedSteps { get; set; } = new();
-    }
+    public Guid ReportId { get; set; }
 
-    public enum ReportStatus
-    {
-        Initiated,
-        AiAnalysisInProgress,
-        AiAnalysisCompleted,
-        DataRetrievalInProgress,
-        DataRetrievalCompleted,
-        GeneratingDocument,
-        DocumentGenerated,
-        DistributingReport,
-        DistributionCompleted,
-        PendingValidation,
-        ValidationCompleted,
-        ArchivingReport,
-        ArchivingCompleted,
-        Completed,
-        Failed,
-        Compensating,
-        Compensated
-    }
+    /// <summary>
+    /// Original input parameters that started this saga instance.
+    /// </summary>
+    public ReportGenerationSagaInput RequestParameters { get; set; } = new ReportGenerationSagaInput();
 
-    public enum ReportValidationStatus
-    {
-        NotRequired,
-        Pending,
-        Approved,
-        Rejected,
-        TimedOut
-    }
+    /// <summary>
+    /// Current status of the report generation saga.
+    /// Examples: "Initiated", "AiAnalysisInProgress", "DataRetrievalComplete", "DocumentGenerated", "ValidationPending", "Distributed", "Archived", "Failed", "Compensating".
+    /// </summary>
+    public string CurrentStatus { get; set; } = "Not Started";
+
+    /// <summary>
+    /// URI or reference to the AI analysis results.
+    /// </summary>
+    public string? AiAnalysisResultUri { get; set; }
+
+    /// <summary>
+    /// URI or reference to the retrieved historical data.
+    /// </summary>
+    public string? HistoricalDataReference { get; set; }
+
+    /// <summary>
+    /// URI or path to the generated report document.
+    /// </summary>
+    public string? GeneratedDocumentUri { get; set; }
+
+    /// <summary>
+    /// List of recipients or locations for distribution (can be updated by DistributeReportActivity).
+    /// </summary>
+    public List<string>? DistributionList { get; set; }
+
+    /// <summary>
+    /// Status of the validation step (e.g., "Pending", "Approved", "Rejected").
+    /// </summary>
+    public string? ValidationStatus { get; set; }
+
+    /// <summary>
+    /// Reference or ID for the archived report version.
+    /// </summary>
+    public string? ArchiveReference { get; set; }
+
+    /// <summary>
+    /// Stores error details if the saga fails.
+    /// </summary>
+    public string? ErrorMessage { get; set; }
+
+    /// <summary>
+    /// Log of compensation actions taken (optional, for diagnostics).
+    /// </summary>
+    public List<string> CompensationLog { get; set; } = new List<string>();
 }

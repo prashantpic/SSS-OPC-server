@@ -1,28 +1,32 @@
 using System.Collections.Generic;
 
-namespace OrchestrationService.Workflows.BlockchainSync
+namespace OrchestrationService.Workflows.BlockchainSync;
+
+/// <summary>
+/// Defines the critical data payload (or reference to it) and associated metadata
+/// required to initiate the blockchain synchronization saga.
+/// </summary>
+public class BlockchainSyncSagaInput
 {
     /// <summary>
-    /// Defines the critical data payload (or reference to it) and associated metadata
-    /// required to initiate the blockchain synchronization saga.
-    /// Implements REQ-8-007.
+    /// Reference or ID of the critical data to be synchronized.
+    /// This could be an identifier to fetch the data or the data itself if small.
     /// </summary>
-    public class BlockchainSyncSagaInput
-    {
-        /// <summary>
-        /// The critical data payload itself (e.g., serialized object, raw bytes).
-        /// Use this if data is small enough to pass directly.
-        /// </summary>
-        public byte[]? CriticalDataPayload { get; set; }
+    public string CriticalDataReference { get; set; } = string.Empty;
 
-        /// <summary>
-        /// A reference (e.g., URI, ID) to retrieve the critical data if it's too large
-        /// to pass directly in the input. The orchestrator or an early activity
-        /// would be responsible for fetching this data.
-        /// </summary>
-        public string? CriticalDataReference { get; set; }
+    /// <summary>
+    /// Optional: Direct data payload if the data is not voluminous and can be passed directly.
+    /// If provided, CriticalDataReference might be a descriptive name or ID.
+    /// </summary>
+    public string? DataPayload { get; set; } // E.g., JSON string of the data
 
-        public Dictionary<string, object> Metadata { get; set; } = new();
-        public string RequestedBy { get; set; } = string.Empty; // User or system initiating
-    }
+    /// <summary>
+    /// Additional metadata related to the data or the synchronization request.
+    /// </summary>
+    public Dictionary<string, string> Metadata { get; set; } = new Dictionary<string, string>();
+
+    /// <summary>
+    /// Optional: Identifier of the event or external trigger that initiated this sync request.
+    /// </summary>
+    public string? TriggeringEventId { get; set; }
 }

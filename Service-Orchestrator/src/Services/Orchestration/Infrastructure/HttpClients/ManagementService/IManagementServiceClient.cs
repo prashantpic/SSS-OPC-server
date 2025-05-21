@@ -1,44 +1,37 @@
-using System.Threading;
-using System.Threading.Tasks;
+using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
+using OrchestrationService.Workflows.ReportGeneration.Activities; // For DTOs like ResolvedDistributionListDto
 
-namespace OrchestrationService.Infrastructure.HttpClients.ManagementService
+namespace OrchestrationService.Infrastructure.HttpClients.ManagementService;
+
+/// <summary>
+/// Defines the contract for communication with the external Management Service (REPO-SERVER-MGMT),
+/// e.g., for fetching configurations or user/role details for RBAC checks in workflows.
+/// </summary>
+public interface IManagementServiceClient
 {
-    // Placeholder DTOs
-    public record UserRolesDto(string UserId, List<string> Roles);
-    public record DistributionDetailsDto(string TargetId, string TargetType, List<string> Recipients, Dictionary<string,object> Configuration);
-    public record ReportValidationStatusDto(string ReportId, string Status, string? ValidatedBy, System.DateTime? ValidationTimestamp);
-
+    /// <summary>
+    /// Retrieves user role details for Role-Based Access Control (RBAC) checks.
+    /// </summary>
+    /// <param name="userId">The unique identifier of the user.</param>
+    /// <returns>A DTO containing the user's roles and potentially other relevant details.</returns>
+    Task<UserRoleDetailsDto> GetUserRolesAsync(Guid userId);
 
     /// <summary>
-    /// Defines the contract for communication with the external Management Service,
-    /// e.g., for fetching configurations or user/role details for RBAC checks in workflows.
-    /// Implements REQ-7-022.
+    /// Resolves a list of distribution identifiers (e.g., role names, group names)
+    /// into a concrete list of recipients (e.g., email addresses).
     /// </summary>
-    public interface IManagementServiceClient
-    {
-        /// <summary>
-        /// Gets user roles for a given user ID.
-        /// </summary>
-        /// <param name="userId">The ID of the user.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>User roles information.</returns>
-        Task<UserRolesDto?> GetUserRolesAsync(string userId, CancellationToken cancellationToken = default);
+    /// <param name="distributionIdentifiers">A list of identifiers to resolve for report distribution.</param>
+    /// <returns>A DTO containing the resolved list of email addresses or other recipient details.</returns>
+    Task<ResolvedDistributionListDto> ResolveDistributionListAsync(List<string> distributionIdentifiers);
 
-        /// <summary>
-        /// Gets distribution details for a given distribution target ID.
-        /// </summary>
-        /// <param name="distributionTargetId">The ID of the distribution target (e.g., a group name).</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>Distribution details including recipients and configuration.</returns>
-        Task<DistributionDetailsDto?> GetDistributionDetailsAsync(string distributionTargetId, CancellationToken cancellationToken = default);
-
-        /// <summary>
-        /// Retrieves the validation status of a report from the Management Service.
-        /// </summary>
-        /// <param name="reportId">The ID of the report to check.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>The validation status of the report.</returns>
-        Task<ReportValidationStatusDto?> GetReportValidationStatusAsync(string reportId, CancellationToken cancellationToken = default);
-    }
+    /// <summary>
+    /// Notifies the Management Service or an external system that a report requires validation.
+    /// </summary>
+    /// <param name="workflowInstanceId">The ID of the workflow instance requiring validation.</param>
+    /// <param name="reportUri">The URI of the report document that needs validation.</param>
+    /// <param name="validatorRole">Optional: The role or group responsible for validation.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    Task RequestReportValidationAsync(string workflowInstanceId, string reportUri, string? validatorRole);
 }

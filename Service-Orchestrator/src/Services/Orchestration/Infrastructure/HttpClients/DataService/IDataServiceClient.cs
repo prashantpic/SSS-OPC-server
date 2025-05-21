@@ -1,60 +1,57 @@
-using System.Threading;
 using System.Threading.Tasks;
-using System.Collections.Generic;
+using OrchestrationService.Workflows.ReportGeneration; // For DTOs like DataFilters, ReportMetadataDto
+using OrchestrationService.Workflows.ReportGeneration.Activities; // For HistoricalDataDto
+using OrchestrationService.Workflows.BlockchainSync.Activities; // For OffChainStorageResultDto
 
-namespace OrchestrationService.Infrastructure.HttpClients.DataService
+namespace OrchestrationService.Infrastructure.HttpClients.DataService;
+
+/// <summary>
+/// Defines the contract for communication with the external Data Service (REPO-DATA-SERVICE)
+/// for operations like historical data retrieval, report archiving, and off-chain data storage.
+/// </summary>
+public interface IDataServiceClient
 {
-    // Placeholder DTOs
-    public record DataQueryParametersDto(string QueryType, Dictionary<string, object> Filters);
-    public record HistoricalDataResultDto(string DataReference, int RecordCount); // Simplified
+    /// <summary>
+    /// Retrieves historical data based on the provided filters.
+    /// </summary>
+    /// <param name="filters">Data filtering criteria (e.g., time range, tag IDs).</param>
+    /// <returns>A DTO containing a reference (e.g., URI or ID) to the retrieved historical data.</returns>
+    Task<HistoricalDataDto> GetHistoricalDataAsync(DataFilters filters);
 
     /// <summary>
-    /// Defines the contract for communication with the external Data Service
-    /// for operations like historical data retrieval, report archiving, and off-chain data storage.
-    /// Implements REQ-7-020, REQ-7-022, REQ-8-007, REQ-DLP-025.
+    /// Archives a generated report document.
     /// </summary>
-    public interface IDataServiceClient
-    {
-        /// <summary>
-        /// Queries historical data from the Data Service.
-        /// </summary>
-        /// <param name="parameters">Parameters for the data query.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>A reference or summary of the retrieved historical data.</returns>
-        Task<HistoricalDataResultDto> QueryHistoricalDataAsync(DataQueryParametersDto parameters, CancellationToken cancellationToken = default);
+    /// <param name="reportUri">The URI or path of the report document to archive.</param>
+    /// <param name="metadata">Metadata associated with the report (e.g., ReportId, Type, Version).</param>
+    /// <returns>A DTO containing a reference to the archived report (e.g., archive ID or path).</returns>
+    Task<ArchiveReportResponseDto> ArchiveReportAsync(string reportUri, ReportMetadataDto metadata);
 
-        /// <summary>
-        /// Archives a report document in the Data Service.
-        /// </summary>
-        /// <param name="reportId">The ID of the report.</param>
-        /// <param name="documentUri">The URI of the document to archive.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>A task representing the asynchronous operation. Optionally, a URI to the archived report.</returns>
-        Task<string?> ArchiveReportAsync(string reportId, string documentUri, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Stores voluminous data off-chain, typically before committing a hash on-chain.
+    /// </summary>
+    /// <param name="dataReferenceId">A reference to the original data source or the data payload itself if small.</param>
+    /// <param name="dataHash">The cryptographic hash of the data being stored.</param>
+    /// <returns>A DTO containing the storage path or reference for the off-chain data.</returns>
+    Task<OffChainStorageResultDto> StoreOffChainDataAsync(string dataReferenceId, string dataHash);
 
-        /// <summary>
-        /// Stores voluminous data off-chain.
-        /// </summary>
-        /// <param name="data">The data payload to store.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>A reference or URI to the stored off-chain data.</returns>
-        Task<string> StoreOffChainDataAsync(byte[] data, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Marks previously stored off-chain data for cleanup or deletion, used in compensation logic.
+    /// </summary>
+    /// <param name="offChainStoragePath">The storage path or reference of the off-chain data to mark for cleanup.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    Task MarkOffChainDataForCleanupAsync(string offChainStoragePath);
 
-        /// <summary>
-        /// Deletes a document, typically used for compensation logic.
-        /// </summary>
-        /// <param name="documentUri">The URI of the document to delete.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>A task representing the asynchronous operation.</returns>
-        Task DeleteDocumentAsync(string documentUri, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Deletes a file based on its URI or path. Used for compensation cleanup of generated documents.
+    /// </summary>
+    /// <param name="fileUri">The URI or path of the file to delete.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    Task DeleteFileAsync(string fileUri);
+}
 
-        /// <summary>
-        /// Marks off-chain stored data as 'failed-sync' or schedules for cleanup.
-        /// Used in compensation for blockchain sync failures.
-        /// </summary>
-        /// <param name="offChainStoragePath">The path or reference to the off-chain data.</param>
-        /// <param name="reason">Reason for failure.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        Task MarkOffChainDataForCleanupAsync(string offChainStoragePath, string reason, CancellationToken cancellationToken = default);
-    }
+// Define ArchiveReportResponseDto if it returns something specific
+public class ArchiveReportResponseDto
+{
+    public string ArchiveReference { get; set; }
+    public bool Success { get; set; }
 }
