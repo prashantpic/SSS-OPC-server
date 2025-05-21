@@ -1,88 +1,90 @@
-using AIService.Domain.Models;
-using System.Collections.Generic;
-using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
-
 namespace AIService.Domain.Interfaces
 {
+    using AIService.Domain.Models;
+    using System.Collections.Generic;
+    using System.IO;
+    using System.Threading.Tasks;
+
     /// <summary>
-    /// Defines the contract for interacting with an MLOps platform,
-    /// covering functionalities like model registration, deployment tracking, and performance monitoring.
-    /// Supports REQ-7-004.
+    /// Defines the contract for interacting with an MLOps platform.
+    /// Covers functionalities like model registration, deployment tracking, and performance monitoring.
+    /// (REQ-7-004, REQ-7-010, REQ-8-001)
     /// </summary>
     public interface IMlLopsClient
     {
         /// <summary>
-        /// Registers a model with the MLOps platform.
+        /// Registers a new model or a new version of an existing model with the MLOps platform.
         /// </summary>
         /// <param name="model">The AiModel metadata.</param>
-        /// <param name="artifactStream">A stream containing the model artifact.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>A unique identifier or version for the registered model from the MLOps platform, if applicable.</returns>
-        Task<string?> RegisterModelAsync(AiModel model, Stream artifactStream, CancellationToken cancellationToken = default);
+        /// <param name="artifactStream">A stream containing the model artifact file.</param>
+        /// <returns>True if registration was successful; otherwise, false. May also return a platform-specific model ID or version.</returns>
+        Task<bool> RegisterModelAsync(AiModel model, Stream artifactStream);
 
         /// <summary>
-        /// Logs prediction feedback to the MLOps platform for monitoring or retraining purposes.
+        /// Logs prediction feedback to the MLOps platform for monitoring and retraining purposes.
+        /// (REQ-7-005)
         /// </summary>
-        /// <param name="modelId">The ID of the model used for prediction.</param>
-        /// <param name="modelVersion">The version of the model used.</param>
-        /// <param name="input">The input data provided to the model.</param>
-        /// <param name="predictedOutput">The output predicted by the model.</param>
-        /// <param name="actualOutput">The actual (ground truth) output, if available.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        Task LogPredictionFeedbackAsync(
-            string modelId,
-            string modelVersion,
-            ModelInput input,
-            ModelOutput predictedOutput,
-            ModelOutput? actualOutput = null, // Actual output might not always be available immediately
-            Dictionary<string, string>? customTags = null, // Additional tags for MLOps
-            CancellationToken cancellationToken = default);
+        /// <param name="feedback">The model feedback details.</param>
+        /// <returns>True if feedback logging was successful; otherwise, false.</returns>
+        Task<bool> LogPredictionFeedbackAsync(ModelFeedback feedback);
 
         /// <summary>
-        /// Retrieves the deployment status of a model in a specific environment from the MLOps platform.
+        /// Retrieves the deployment status of a specific model in a given environment from the MLOps platform.
         /// </summary>
-        /// <param name="modelId">The ID of the model.</param>
-        /// <param name="environment">The target deployment environment (e.g., "staging", "production", "edge-device-group-X").</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>A string representing the deployment status, or null if not found/applicable.</returns>
-        Task<string?> GetModelDeploymentStatusAsync(string modelId, string environment, CancellationToken cancellationToken = default);
+        /// <param name="modelId">The unique identifier of the model.</param>
+        /// <param name="modelVersion">The version of the model.</param>
+        /// <param name="environment">The target deployment environment (e.g., "production", "edge-group-A").</param>
+        /// <returns>A string or object representing the deployment status.</returns>
+        Task<string> GetModelDeploymentStatusAsync(string modelId, string modelVersion, string environment);
 
         /// <summary>
-        /// Triggers the deployment of a specific model version to designated edge devices or environments via the MLOps platform.
+        /// Initiates the deployment of a specific model version to designated edge devices via the MLOps platform.
+        /// (REQ-8-001)
         /// </summary>
-        /// <param name="modelId">The ID of the model to deploy.</param>
+        /// <param name="modelId">The unique identifier of the model.</param>
         /// <param name="modelVersion">The version of the model to deploy.</param>
-        /// <param name="targetIdentifiers">A collection of identifiers for target devices or deployment environments.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>A tracking ID or status message for the deployment operation.</returns>
-        Task<string?> TriggerDeploymentAsync(string modelId, string modelVersion, IEnumerable<string> targetIdentifiers, CancellationToken cancellationToken = default);
-
+        /// <param name="deviceIds">A collection of unique identifiers for the target edge devices.</param>
+        /// <returns>True if the deployment process was successfully initiated; otherwise, false. May also return a deployment job ID.</returns>
+        Task<bool> TriggerEdgeDeploymentAsync(string modelId, string modelVersion, IEnumerable<string> deviceIds);
 
         /// <summary>
-        /// Retrieves a list of registered models from the MLOps platform.
+        /// Logs performance metrics for a model to the MLOps platform.
+        /// (REQ-7-010)
         /// </summary>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>A collection of AiModel metadata obtained from the MLOps platform.</returns>
-        Task<IEnumerable<AiModel>> GetRegisteredModelsAsync(CancellationToken cancellationToken = default);
-
-        /// <summary>
-        /// Retrieves detailed information for a specific model (and optionally version) from the MLOps platform.
-        /// </summary>
-        /// <param name="modelId">The ID of the model.</param>
-        /// <param name="version">Optional. The specific version of the model. If null, latest or all versions might be considered by implementation.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>AiModel metadata if found; otherwise, null.</returns>
-        Task<AiModel?> GetModelDetailsAsync(string modelId, string? version = null, CancellationToken cancellationToken = default);
+        /// <param name="modelId">The unique identifier of the model.</param>
+        /// <param name="modelVersion">The version of the model.</param>
+        /// <param name="metrics">A dictionary of metric names and their values.</param>
+        /// <returns>True if metrics logging was successful; otherwise, false.</returns>
+        Task<bool> LogModelMetricsAsync(string modelId, string modelVersion, Dictionary<string, double> metrics);
 
          /// <summary>
-        /// Initiates a retraining workflow for a given model.
+        /// Initiates a retraining workflow for a model on the MLOps platform.
         /// </summary>
         /// <param name="modelId">The ID of the model to retrain.</param>
+        /// <param name="modelVersion">Optional specific version to base retraining on.</param>
         /// <param name="retrainingParameters">Optional parameters for the retraining job.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>An identifier for the retraining job or status.</returns>
-        Task<string?> InitiateRetrainingWorkflowAsync(string modelId, Dictionary<string, string>? retrainingParameters = null, CancellationToken cancellationToken = default);
+        /// <returns>True if the retraining workflow was successfully initiated.</returns>
+        Task<bool> InitiateRetrainingWorkflowAsync(string modelId, string modelVersion = null, Dictionary<string, string> retrainingParameters = null);
+    }
+
+    /// <summary>
+    /// Represents feedback on a model's prediction. (REQ-7-005)
+    /// </summary>
+    public class ModelFeedback
+    {
+        public string ModelId { get; set; }
+        public string ModelVersion { get; set; }
+        public ModelInput PredictionInput { get; set; } // The input that led to the prediction
+        public ModelOutput OriginalPrediction { get; set; } // The model's original output
+        public object ActualOutcome { get; set; } // The ground truth or corrected outcome (can be structured)
+        public string FeedbackNotes { get; set; } // User comments or reasons for feedback
+        public string UserId { get; set; } // User providing the feedback
+        public System.DateTime Timestamp { get; set; } = System.DateTime.UtcNow;
+        public Dictionary<string, string> AdditionalMetadata { get; set; } // For extensibility
+
+        public ModelFeedback()
+        {
+            AdditionalMetadata = new Dictionary<string, string>();
+        }
     }
 }

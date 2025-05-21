@@ -1,54 +1,64 @@
-using AIService.Domain.Enums;
-using System;
-
 namespace AIService.Domain.Models
 {
+    using AIService.Domain.Enums;
+
     /// <summary>
-    /// Core domain entity representing an AI model, including its metadata (ID, Name, Version, Description),
-    /// type (PredictiveMaintenance, AnomalyDetection), format (ONNX, TensorFlowLite),
-    /// storage reference (path or URI), input/output schema definition, and current lifecycle status.
-    /// Enforces REQ-7-002 and REQ-7-009 through its schema.
+    /// Core domain entity representing an AI model.
+    /// Includes metadata, type, format, storage reference, schema, and status.
+    /// Enforces REQ-7-002 and REQ-7-009 through its schema definitions.
     /// </summary>
     public class AiModel
     {
-        public string Id { get; private set; }
+        /// <summary>
+        /// Unique identifier for the AI model.
+        /// </summary>
+        public string Id { get; set; }
+
+        /// <summary>
+        /// Human-readable name of the AI model.
+        /// </summary>
         public string Name { get; set; }
+
+        /// <summary>
+        /// Version of the AI model.
+        /// </summary>
         public string Version { get; set; }
+
+        /// <summary>
+        /// Description of the AI model.
+        /// </summary>
         public string Description { get; set; }
+
+        /// <summary>
+        /// Type of the AI model (e.g., PredictiveMaintenance, AnomalyDetection).
+        /// </summary>
         public ModelType ModelType { get; set; }
+
+        /// <summary>
+        /// File format of the AI model (e.g., ONNX, TensorFlowLite).
+        /// </summary>
         public ModelFormat ModelFormat { get; set; }
-        public string StorageReference { get; set; } // Path, URI, or an identifier for DataService
-        public string InputSchema { get; set; } // JSON string defining input structure, names, types, shapes
-        public string OutputSchema { get; set; } // JSON string defining output structure, names, types, shapes
-        public string Status { get; set; } // e.g., "Registered", "Validated", "Deployed", "Error", "Training"
-        public DateTime CreatedAt { get; private set; }
-        public DateTime UpdatedAt { get; set; }
-        public string? Checksum { get; set; } // Checksum of the model artifact
 
-        public AiModel(string id, string name, string version, ModelType modelType, ModelFormat modelFormat, string storageReference, string inputSchema, string outputSchema)
-        {
-            if (string.IsNullOrWhiteSpace(id))
-                throw new ArgumentException("Model ID cannot be null or whitespace.", nameof(id));
-            if (string.IsNullOrWhiteSpace(name))
-                throw new ArgumentException("Model Name cannot be null or whitespace.", nameof(name));
-            if (string.IsNullOrWhiteSpace(version))
-                throw new ArgumentException("Model Version cannot be null or whitespace.", nameof(version));
+        /// <summary>
+        /// Reference to the storage location of the model artifact (e.g., path, URI, or Data Service ID).
+        /// </summary>
+        public string StorageReference { get; set; }
 
-            Id = id;
-            Name = name;
-            Version = version;
-            ModelType = modelType;
-            ModelFormat = modelFormat;
-            StorageReference = storageReference ?? throw new ArgumentNullException(nameof(storageReference));
-            InputSchema = inputSchema ?? throw new ArgumentNullException(nameof(inputSchema));
-            OutputSchema = outputSchema ?? throw new ArgumentNullException(nameof(outputSchema));
-            Description = string.Empty;
-            Status = "Registered"; // Initial status
-            CreatedAt = DateTime.UtcNow;
-            UpdatedAt = DateTime.UtcNow;
-        }
+        /// <summary>
+        /// JSON string or custom object defining the expected input schema (features, names, types, shapes).
+        /// Used for ModelInput validation (REQ-7-002, REQ-7-009).
+        /// </summary>
+        public string InputSchema { get; set; } // Could be a more structured object or validated JSON
 
-        // Private constructor for ORM or deserialization
-        private AiModel() { }
+        /// <summary>
+        /// JSON string or custom object defining the expected output schema (features, names, types, shapes).
+        /// Used for parsing ModelOutput.
+        /// </summary>
+        public string OutputSchema { get; set; } // Could be a more structured object
+
+        /// <summary>
+        /// Current lifecycle status of the model (e.g., Registered, Deployed, Retired).
+        /// </summary>
+        public string Status { get; set; } // Could be an enum
     }
 }

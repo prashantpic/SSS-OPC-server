@@ -1,37 +1,39 @@
-using System.Collections.Generic;
-
 namespace AIService.Domain.Models
 {
+    using System.Collections.Generic;
+
     /// <summary>
     /// Represents structured output data from an AI model execution.
+    /// (REQ-7-001, REQ-7-008)
     /// </summary>
     public class ModelOutput
     {
         /// <summary>
-        /// A dictionary holding the output names and their corresponding predicted values.
-        /// The actual types and structure conform to the AiModel's OutputSchema.
+        /// A dictionary holding the output predictions or results from the model.
+        /// Keys are output names, and values are the prediction values.
+        /// The structure and types should conform to the AiModel's OutputSchema.
         /// </summary>
-        public Dictionary<string, object> Results { get; private set; }
+        public Dictionary<string, object> Predictions { get; set; }
 
         /// <summary>
-        /// Optional. Raw output from the model if specific parsing is needed upstream or for debugging.
-        /// </summary>
-        public object? RawOutput { get; set; }
-
-        /// <summary>
-        /// Indicates if the prediction was successful.
+        /// Indicates whether the model execution was successful.
         /// </summary>
         public bool IsSuccess { get; set; }
 
         /// <summary>
-        /// Error message if the prediction was not successful.
+        /// Optional error message if the execution was not successful.
         /// </summary>
-        public string? ErrorMessage { get; set; }
+        public string ErrorMessage { get; set; }
 
-
-        public ModelOutput(Dictionary<string, object> results, bool isSuccess = true, string? errorMessage = null)
+        public ModelOutput()
         {
-            Results = results ?? new Dictionary<string, object>();
+            Predictions = new Dictionary<string, object>();
+            IsSuccess = true; 
+        }
+
+         public ModelOutput(Dictionary<string, object> predictions, bool isSuccess = true, string errorMessage = null)
+        {
+            Predictions = predictions ?? new Dictionary<string, object>();
             IsSuccess = isSuccess;
             ErrorMessage = errorMessage;
         }

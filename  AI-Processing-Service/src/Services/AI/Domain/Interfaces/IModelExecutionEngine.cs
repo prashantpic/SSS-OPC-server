@@ -1,42 +1,44 @@
-using AIService.Domain.Enums;
-using AIService.Domain.Models;
-using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
-
 namespace AIService.Domain.Interfaces
 {
+    using AIService.Domain.Enums;
+    using AIService.Domain.Models;
+    using System.IO;
+    using System.Threading.Tasks;
+
     /// <summary>
     /// Defines the contract for a specific AI model runtime (e.g., ONNX, TensorFlow).
     /// Implementations will handle loading and running models of a particular format.
+    /// (REQ-7-003, REQ-8-001)
     /// </summary>
     public interface IModelExecutionEngine
     {
         /// <summary>
-        /// Checks if this engine can handle the specified model format.
+        /// Gets the model format that this engine can handle.
         /// </summary>
-        /// <param name="format">The model format to check.</param>
-        /// <returns>True if the engine supports the format, false otherwise.</returns>
-        bool CanHandle(ModelFormat format);
+        ModelFormat SupportedFormat { get; }
 
         /// <summary>
-        /// Loads the specified AI model artifact into the engine.
-        /// This method should make the engine ready for execution.
-        /// Implementations might cache loaded models internally.
+        /// Loads an AI model from a stream into the execution engine.
+        /// The AiModel definition provides context like input/output schema.
         /// </summary>
-        /// <param name="model">The AiModel metadata.</param>
-        /// <param name="modelArtifactStream">A stream containing the model's binary artifact.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        Task LoadModelAsync(AiModel model, Stream modelArtifactStream, CancellationToken cancellationToken = default);
+        /// <param name="modelArtifactStream">A stream containing the model artifact.</param>
+        /// <param name="modelDefinition">The AiModel definition providing metadata and schema.</param>
+        /// <returns>A task representing the asynchronous loading operation. Returns a unique identifier for the loaded model instance or session.</returns>
+        Task<string> LoadModelAsync(Stream modelArtifactStream, AiModel modelDefinition);
+        
+        /// <summary>
+        /// Unloads a previously loaded model instance to free up resources.
+        /// </summary>
+        /// <param name="loadedModelIdentifier">The identifier of the loaded model instance, returned by LoadModelAsync.</param>
+        /// <returns>A task representing the asynchronous unloading operation.</returns>
+        Task UnloadModelAsync(string loadedModelIdentifier);
 
         /// <summary>
-        /// Executes the pre-loaded model with the given input.
+        /// Executes a loaded AI model with the given input.
         /// </summary>
-        /// <param name="modelId">Identifier of the model to execute (used for internal state management if engine supports multiple loaded models).</param>
-        /// <param name="input">The ModelInput data.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <param name="loadedModelIdentifier">The identifier of the loaded model instance.</param>
+        /// <param name="input">The ModelInput data for the execution.</param>
         /// <returns>A ModelOutput containing the prediction results.</returns>
-        /// <exception cref="InvalidOperationException">If the specified model is not loaded or if the engine is not ready.</exception>
-        Task<ModelOutput> ExecuteAsync(string modelId, ModelInput input, CancellationToken cancellationToken = default);
+        Task<ModelOutput> ExecuteAsync(string loadedModelIdentifier, ModelInput input);
     }
 }

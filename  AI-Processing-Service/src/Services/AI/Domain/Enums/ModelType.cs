@@ -1,18 +1,39 @@
 namespace AIService.Domain.Enums
 {
     /// <summary>
-    /// Defines the types of AI models supported, e.g.,
-    /// PredictiveMaintenance, AnomalyDetection, NlpIntentClassifier.
+    /// Defines the types of AI models supported by the service.
+    /// (REQ-7-001, REQ-7-008)
     /// </summary>
     public enum ModelType
     {
-        Undefined = 0,
-        PredictiveMaintenance = 1,
-        AnomalyDetection = 2,
-        NlpIntentClassifier = 3,
-        NlpEntityRecognition = 4,
-        ImageClassification = 5,
-        ObjectDetection = 6,
-        Generic = 7 // For models not fitting specific categories but usable by the engine
+        /// <summary>
+        /// Model for predictive maintenance tasks.
+        /// </summary>
+        PredictiveMaintenance,
+
+        /// <summary>
+        /// Model for anomaly detection tasks.
+        /// </summary>
+        AnomalyDetection,
+
+        /// <summary>
+        /// Model for classifying user intent in Natural Language Queries.
+        /// </summary>
+        NlpIntentClassifier,
+
+        /// <summary>
+        /// Model for Named Entity Recognition in Natural Language Queries.
+        /// </summary>
+        NlpEntityRecognizer,
+
+        /// <summary>
+        /// Model for computer vision tasks, such as image classification or object detection.
+        /// </summary>
+        ComputerVision,
+
+        /// <summary>
+        /// A general-purpose or custom model type not fitting other categories.
+        /// </summary>
+        Generic
     }
 }

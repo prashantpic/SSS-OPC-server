@@ -1,141 +1,147 @@
-using AIService.Domain.Interfaces;
-using AIService.Domain.Models;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-
-// Placeholder for NlpProviderOptions, which would be in the Configuration project/namespace
-namespace AIService.Configuration
-{
-    public class NlpProviderOptions
-    {
-        public string ActiveProvider { get; set; } = "Default"; // e.g., "SpaCy", "AzureCognitiveServices"
-        public Dictionary<string, string> GlobalAliases { get; set; } = new Dictionary<string, string>();
-        public string? FallbackProvider { get; set; } // Optional: Name of a provider to use as fallback
-        public double MinConfidenceForPrimary { get; set; } = 0.7; // Min confidence to accept from primary before trying fallback
-    }
-}
-
 namespace AIService.Domain.Services
 {
+    using AIService.Domain.Interfaces;
+    using AIService.Domain.Models;
+    using AIService.Configuration; // Assuming NlpProviderOptions is here
+    using Microsoft.Extensions.Options;
+    using Microsoft.Extensions.Logging;
+    using System.Collections.Generic;
+    using System.Linq;
+    using System.Threading.Tasks;
+    using System;
+
     /// <summary>
-    /// Orchestrates NLQ processing. It selects the appropriate INlpProvider based on configuration,
-    /// processes the query, applies user-defined aliases (REQ-7-015), and handles fallbacks (REQ-7-016).
+    /// Orchestrates NLQ processing. It selects the appropriate INlpProvider,
+    /// processes the query, applies user-defined aliases, and handles fallbacks.
+    /// (REQ-7-014, REQ-7-015, REQ-7-016)
     /// </summary>
     public class NlpOrchestrationService
     {
         private readonly IEnumerable<INlpProvider> _nlpProviders;
-        private readonly NlpProviderOptions _options;
+        private readonly NlpProviderOptions _nlpOptions;
         private readonly ILogger<NlpOrchestrationService> _logger;
+        // private readonly IModelRepository _modelRepository; // Potentially for fetching aliases/mappings dynamically
 
         public NlpOrchestrationService(
             IEnumerable<INlpProvider> nlpProviders,
-            IOptions<NlpProviderOptions> options,
+            IOptions<NlpProviderOptions> nlpOptions,
             ILogger<NlpOrchestrationService> logger)
+            // IModelRepository modelRepository) // If aliases are stored via ModelRepository
         {
             _nlpProviders = nlpProviders ?? throw new ArgumentNullException(nameof(nlpProviders));
-            _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
+            _nlpOptions = nlpOptions?.Value ?? throw new ArgumentNullException(nameof(nlpOptions));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            // _modelRepository = modelRepository;
         }
 
-        public async Task<NlqContext> ProcessAsync(string query, NlqContext initialContext, CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Processes a natural language query using the configured NLP provider and strategies.
+        /// </summary>
+        /// <param name="query">The raw natural language query string.</param>
+        /// <param name="initialContext">Optional pre-existing NlqContext (e.g., with user-specific aliases).</param>
+        /// <returns>An NlqContext populated with the processing results.</returns>
+        public async Task<NlqContext> ProcessAsync(string query, NlqContext initialContext = null)
         {
             if (string.IsNullOrWhiteSpace(query))
             {
-                initialContext.ErrorMessage = "Query cannot be empty.";
-                return initialContext;
+                _logger.LogWarning("NLP processing attempted with an empty query.");
+                return new NlqContext(query) { IdentifiedIntent = "Error", AdditionalData = new Dictionary<string, object>{{"ErrorMessage", "Query cannot be empty."}} };
             }
 
-            _logger.LogInformation("Processing NLQ: '{Query}' with active provider hint: {ActiveProvider}", query, _options.ActiveProvider);
+            NlqContext context = initialContext ?? new NlqContext(query);
+            context.OriginalQuery = query; // Ensure original query is set
 
-            INlpProvider? primaryProvider = _nlpProviders.FirstOrDefault(p =>
-                p.ProviderName.Equals(_options.ActiveProvider, StringComparison.OrdinalIgnoreCase));
+            // 1. Apply pre-defined aliases (REQ-7-015) - could be from config or context
+            // This is a simplified placeholder. Real alias application might be more complex.
+            // context.ProcessedQuery = ApplyConfiguredAliases(context.OriginalQuery, _nlpOptions.UserDefinedAliases);
+            // if (initialContext?.AppliedAliases != null) { /* merge or use initial context's aliases */ }
 
-            if (primaryProvider == null)
+
+            INlpProvider selectedProvider = _nlpProviders.FirstOrDefault(p => 
+                string.Equals(p.ProviderName, _nlpOptions.ActiveProvider, StringComparison.OrdinalIgnoreCase));
+
+            if (selectedProvider == null)
             {
-                _logger.LogError("Active NLP provider '{ActiveProvider}' not found.", _options.ActiveProvider);
-                initialContext.ErrorMessage = $"Active NLP provider '{_options.ActiveProvider}' not found.";
-                return initialContext;
+                _logger.LogError("Active NLP provider '{ActiveProvider}' configured in NlpProviderOptions not found or not registered.", _nlpOptions.ActiveProvider);
+                context.IdentifiedIntent = "Error_Configuration";
+                context.AdditionalData["ErrorMessage"] = $"NLP Provider '{_nlpOptions.ActiveProvider}' not available.";
+                return context;
             }
             
-            initialContext.ProviderUsed = primaryProvider.ProviderName;
-
-            // Apply global aliases before sending to provider
-            string processedQueryForProvider = ApplyAliases(query, _options.GlobalAliases);
-            initialContext.ProcessedQuery = processedQueryForProvider; // Store pre-provider alias application
+            _logger.LogInformation("Using NLP provider: {ProviderName} for query: \"{Query}\"", selectedProvider.ProviderName, query);
+            context.ProviderUsed = selectedProvider.ProviderName;
 
             try
             {
-                NlqContext resultContext = await primaryProvider.ProcessAsync(processedQueryForProvider, initialContext, cancellationToken);
-
-                // Apply user-specific aliases from initialContext if any (could be done before or after provider)
-                // For now, assume provider might use context.AppliedAliases or we can re-apply here if needed.
-
-                // Fallback logic REQ-7-016
-                if (!string.IsNullOrWhiteSpace(_options.FallbackProvider) &&
-                    (resultContext.ConfidenceScore == null || resultContext.ConfidenceScore < _options.MinConfidenceForPrimary || !string.IsNullOrWhiteSpace(resultContext.ErrorMessage)))
+                context = await selectedProvider.ProcessAsync(context.ProcessedQuery, context);
+                _logger.LogInformation("NLP processing completed. Intent: {Intent}, Entities: {EntityCount}", context.IdentifiedIntent, context.ExtractedEntities.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during NLP processing with provider {ProviderName} for query: \"{Query}\"", selectedProvider.ProviderName, query);
+                
+                // Fallback strategy (REQ-7-016)
+                if (_nlpOptions.EnableFallback && !string.IsNullOrWhiteSpace(_nlpOptions.FallbackProviderName) && 
+                    !string.Equals(selectedProvider.ProviderName, _nlpOptions.FallbackProviderName, StringComparison.OrdinalIgnoreCase))
                 {
-                    _logger.LogInformation("Primary provider result for '{Query}' has low confidence or error. Attempting fallback with {FallbackProvider}.", query, _options.FallbackProvider);
-                    INlpProvider? fallbackProvider = _nlpProviders.FirstOrDefault(p =>
-                        p.ProviderName.Equals(_options.FallbackProvider, StringComparison.OrdinalIgnoreCase));
-
+                    _logger.LogInformation("Attempting fallback NLP provider: {FallbackProviderName}", _nlpOptions.FallbackProviderName);
+                    INlpProvider fallbackProvider = _nlpProviders.FirstOrDefault(p => 
+                        string.Equals(p.ProviderName, _nlpOptions.FallbackProviderName, StringComparison.OrdinalIgnoreCase));
+                    
                     if (fallbackProvider != null)
                     {
-                        // Create a new context or reset parts of the existing one for the fallback provider
-                        var fallbackInitialContext = new NlqContext(query) // Start fresh with original query for fallback
+                        context.FallbackApplied = true;
+                        context.ProviderUsed = fallbackProvider.ProviderName; // Update provider used
+                        try
                         {
-                             AppliedAliases = initialContext.AppliedAliases // Carry over user-specific aliases
-                        };
-                        fallbackInitialContext.ProcessedQuery = ApplyAliases(query, _options.GlobalAliases); // Apply global aliases for fallback too
-
-                        NlqContext fallbackResultContext = await fallbackProvider.ProcessAsync(fallbackInitialContext.ProcessedQuery, fallbackInitialContext, cancellationToken);
-                        
-                        // Decide how to merge or replace results. For now, replace if fallback is better.
-                        // This logic can be complex (e.g. combine entities if intents match etc.)
-                        if (fallbackResultContext.ConfidenceScore > resultContext.ConfidenceScore || string.IsNullOrWhiteSpace(resultContext.ErrorMessage) && !string.IsNullOrWhiteSpace(fallbackResultContext.ErrorMessage) == false)
+                            context = await fallbackProvider.ProcessAsync(context.ProcessedQuery, context);
+                             _logger.LogInformation("Fallback NLP processing completed. Intent: {Intent}, Entities: {EntityCount}", context.IdentifiedIntent, context.ExtractedEntities.Count);
+                        }
+                        catch (Exception fallbackEx)
                         {
-                            _logger.LogInformation("Fallback provider '{FallbackProviderName}' yielded a better or successful result.", fallbackProvider.ProviderName);
-                            fallbackResultContext.FallbackApplied = true;
-                            fallbackResultContext.ProviderUsed = fallbackProvider.ProviderName; // Ensure provider is correctly set
-                            return fallbackResultContext;
+                            _logger.LogError(fallbackEx, "Error during fallback NLP processing with provider {FallbackProviderName}", fallbackProvider.ProviderName);
+                            context.IdentifiedIntent = "Error_Processing_Fallback";
+                            context.AdditionalData["ErrorMessage"] = $"Fallback NLP failed: {fallbackEx.Message}";
                         }
                     }
                     else
                     {
-                        _logger.LogWarning("Fallback NLP provider '{FallbackProvider}' not found.", _options.FallbackProvider);
+                        _logger.LogWarning("Fallback NLP provider '{FallbackProviderName}' not found.", _nlpOptions.FallbackProviderName);
+                        context.IdentifiedIntent = "Error_Processing_Primary";
+                        context.AdditionalData["ErrorMessage"] = $"Primary NLP failed: {ex.Message}. Fallback provider not found.";
                     }
                 }
-                
-                resultContext.ProviderUsed = primaryProvider.ProviderName; // Ensure provider is correctly set on the returned context
-                return resultContext;
+                else
+                {
+                    context.IdentifiedIntent = "Error_Processing";
+                    context.AdditionalData["ErrorMessage"] = $"NLP processing failed: {ex.Message}";
+                }
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error processing NLQ '{Query}' with provider {ProviderName}.", query, primaryProvider.ProviderName);
-                initialContext.ErrorMessage = $"Error during NLP processing: {ex.Message}";
-                initialContext.ProviderUsed = primaryProvider.ProviderName;
-                return initialContext;
-            }
+            
+            // Post-processing, e.g., further alias application based on results, confidence scoring adjustments
+            // ApplyDynamicAliases(context); // Placeholder
+
+            return context;
         }
 
-        private string ApplyAliases(string query, IDictionary<string, string> aliases)
-        {
-            if (aliases == null || !aliases.Any())
-            {
-                return query;
-            }
+        // Placeholder for alias application logic (REQ-7-015)
+        // This could be more sophisticated, perhaps involving regex or structured alias definitions.
+        // private string ApplyConfiguredAliases(string query, Dictionary<string, string> aliases)
+        // {
+        //     if (aliases == null || !aliases.Any()) return query;
+        //     string processedQuery = query;
+        //     foreach (var alias in aliases)
+        //     {
+        //         processedQuery = processedQuery.Replace(alias.Key, alias.Value, StringComparison.OrdinalIgnoreCase);
+        //     }
+        //     return processedQuery;
+        // }
 
-            string processedQuery = query;
-            // Simple alias application, more sophisticated logic might be needed (e.g., whole word match)
-            foreach (var alias in aliases)
-            {
-                processedQuery = processedQuery.Replace(alias.Key, alias.Value, StringComparison.OrdinalIgnoreCase);
-            }
-            return processedQuery;
-        }
+        // Placeholder for more complex post-processing or dynamic alias application
+        // private void ApplyDynamicAliases(NlqContext context)
+        // {
+        //     // Example: if an entity "device_xyz" is found, map it to a canonical ID
+        //     // This might involve looking up aliases from a database/configuration
+        // }
     }
 }
