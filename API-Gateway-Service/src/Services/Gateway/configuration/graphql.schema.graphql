@@ -1,99 +1,160 @@
+# GraphQL Schema Definition Language (SDL) for the API Gateway
+# This schema defines the data and operations available through the GraphQL endpoint.
+
 schema {
-  query: RootQuery
-  mutation: RootMutation
-  # subscription: RootSubscription # Uncomment if subscriptions are implemented
+  query: Query
+  mutation: Mutation
+  # subscription: Subscription # Uncomment if subscriptions are implemented
 }
 
-type RootQuery {
-  "Retrieves the status of a specific management client"
-  getClientStatus(clientId: ID!): ManagementClientStatus
-  
-  "Lists all management clients (example, might need pagination)"
-  listClients: [ManagementClientStatus!]!
+# Root Query Type: Entry point for all read operations.
+type Query {
+  "Retrieves the status of a specific management client."
+  managementClientStatus(clientId: ID!): ManagementClientStatus
 
-  "Gets an AI prediction based on the provided input data"
-  getAiPrediction(input: AiInput!): AiPredictionResult
-  
-  "Retrieves historical data for a given tag within a time range"
-  getHistoricalData(tagId: String!, startTime: DateTime!, endTime: DateTime!): [DataPoint!]
+  "Fetches an AI prediction for a given set of input parameters or tag."
+  aiPrediction(tagId: String, inputFeatures: [FeatureInput!]): AiPrediction
 
-  "Example: Get a single piece of example data by ID"
-  exampleServiceData(id: ID!): ExampleServiceData
+  "Gets historical time-series data for specified tags within a time range."
+  historicalData(tagIds: [String!]!, startTime: DateTime!, endTime: DateTime!): [TimeSeriesDataPoint]
+
+  "Lists available OPC servers configured in the system."
+  opcServers: [OpcServerInfo]
+
+  "Retrieves details for a specific OPC tag."
+  opcTagDetails(tagId: ID!): OpcTagDetail
+
+  "Retrieves recent alarm events."
+  recentAlarms(limit: Int = 10): [AlarmEventItem]
 }
 
-type RootMutation {
-  "Updates the configuration for a specific client"
-  updateClientConfig(clientId: ID!, config: ClientConfigInput!): ManagementClientStatus
-  
-  "Placeholder for another mutation"
-  submitFeedback(feedback: FeedbackInput!): Boolean
+# Root Mutation Type: Entry point for all write operations.
+type Mutation {
+  "Acknowledges an alarm event."
+  acknowledgeAlarm(alarmId: ID!, acknowledgementComment: String): AlarmAcknowledgementResponse
+
+  "Updates the configuration for a management client."
+  updateManagementClientConfig(clientId: ID!, config: ClientConfigInput!): ManagementClientStatus
+
+  "Initiates a write operation to an OPC tag."
+  writeOpcTagValue(tagId: ID!, value: String!): OpcTagWriteResponse
 }
 
-# Input Types
+# Example Input Types
+input FeatureInput {
+  name: String!
+  value: Float!
+}
+
 input ClientConfigInput {
-  "Example configuration field"
-  settingA: String
-  settingB: Int
-  isEnabled: Boolean
+  "New polling interval for the client."
+  pollingIntervalSeconds: Int
+  "Enable or disable specific features."
+  featureFlags: [String!]
 }
 
-input AiInput {
-  "Feature 1 for the AI model"
-  feature1: Float!
-  "Feature 2 for the AI model"
-  feature2: String
-  "Timestamp of the input data"
-  timestamp: DateTime!
-}
 
-input FeedbackInput {
-  "User ID submitting feedback"
-  userId: ID
-  "Content of the feedback"
-  message: String!
-  "Rating associated with the feedback"
-  rating: Int
-}
+# Example Object Types (representing data from downstream services)
 
-# Output Types
+"Represents the status of a management client."
 type ManagementClientStatus {
   clientId: ID!
   status: String!
   lastSeen: DateTime
-  kpis: [KpiData!]
-  version: String
-  ipAddress: String
+  activeSubscriptions: Int
+  health: ClientHealthEnum!
 }
 
-type KpiData {
-  name: String!
-  value: Float!
-  timestamp: DateTime!
-  unit: String
+"Health status enumeration for clients."
+enum ClientHealthEnum {
+  HEALTHY
+  DEGRADED
+  UNHEALTHY
+  UNKNOWN
 }
 
-type AiPredictionResult {
-  predictionId: ID!
-  outcome: String!
+"Represents an AI prediction result."
+type AiPrediction {
+  tagId: String
+  "The predicted value or outcome."
+  predictedValue: Float
+  "Confidence score of the prediction."
   confidence: Float
-  suggestedActions: [String!]
-  timestamp: DateTime!
+  "Timestamp of when the prediction was generated."
+  predictionTime: DateTime
+  "Model version used for this prediction."
+  modelVersion: String
 }
 
-type DataPoint {
+"Represents a single point of time-series data."
+type TimeSeriesDataPoint {
+  tagId: String!
   timestamp: DateTime!
-  value: String! # Value can be of various types, string is a generic representation
-  quality: String!
+  value: String! # Using String to accommodate various data types, can be specialized
+  quality: String
 }
 
-type ExampleServiceData {
-  id: ID!
+"Basic information about a configured OPC server."
+type OpcServerInfo {
+  serverId: ID!
   name: String!
-  description: String
-  value: Int
-  isActive: Boolean
-  relatedItems: [String!]
+  type: OpcServerTypeEnum!
+  endpointUrl: String!
+  isActive: Boolean!
 }
 
-# Custom Scalar Types (if needed, e.g. DateTime)
-scalar DateTime
+"OPC Server Type Enumeration."
+enum OpcServerTypeEnum {
+  DA
+  UA
+  XML_DA
+  HDA
+  AC
+}
+
+"Detailed information for an OPC Tag."
+type OpcTagDetail {
+  tagId: ID!
+  nodeId: String!
+  dataType: String!
+  description: String
+  isWritable: Boolean!
+  currentValue: TimeSeriesDataPoint # Example of nesting
+}
+
+"Represents an alarm event."
+type AlarmEventItem {
+  alarmId: ID!
+  sourceNode: String!
+  message: String!
+  severity: Int!
+  eventTime: DateTime!
+  isAcknowledged: Boolean!
+}
+
+# Example Mutation Response Types
+
+"Response from an alarm acknowledgement mutation."
+type AlarmAcknowledgementResponse {
+  success: Boolean!
+  alarmId: ID
+  message: String
+}
+
+"Response from an OPC tag write operation."
+type OpcTagWriteResponse {
+  success: Boolean!
+  tagId: ID!
+  writtenValue: String
+  errorMessage: String
+}
+
+
+# Scalar Types
+scalar DateTime # Custom scalar for date-time values
+
+# Subscriptions (Example - Uncomment and define if real-time updates are needed)
+# type Subscription {
+#   newAlarmEvents: AlarmEventItem
+#   clientStatusUpdates(clientId: ID!): ManagementClientStatus
+# }

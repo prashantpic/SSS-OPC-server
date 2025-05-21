@@ -1,82 +1,88 @@
 {
-  "ReverseProxy": { // YARP's configuration is typically under a "ReverseProxy" key if loaded via AddReverseProxy().LoadFromConfig()
-    "Routes": {
-      "management-grpc-route": {
-        "ClusterId": "management-grpc-cluster",
-        "Match": {
-          "Path": "/ManagementService.gRPC/{**remainder}", // Example path for a gRPC service
-          "Methods": [ "POST" ], // gRPC is typically POST
-          "Headers": [
-            {
-              "Name": "Content-Type",
-              "Values": [ "application/grpc" ],
-              "Mode": "ExactHeader"
-            }
-          ]
-        },
-        "Transforms": [ // Optional: Modify path, headers etc.
-          { "PathPattern": "/{**remainder}" }
-        ],
-        "Order": 100 // YARP routes have an order
+  // YARP (Yet Another Reverse Proxy) Configuration
+  // Routes: Define how incoming requests are matched.
+  "Routes": {
+    // Example: gRPC route for DataService (REQ-SAP-003)
+    "grpc-data-service-route": {
+      "ClusterId": "data-service-grpc-cluster",
+      "Match": {
+        "Path": "/DataService.DataApi/{**remainder}", // Matches gRPC service path pattern
+        "Methods": [ "POST" ] // gRPC typically uses POST
+        // "Hosts": [ "grpc.example.com" ] // Optionally match by host
       },
-      "data-grpc-route": {
-        "ClusterId": "data-grpc-cluster",
-        "Match": {
-          "Path": "/DataService.gRPC/{**remainder}", // Example path
-          "Methods": [ "POST" ],
-          "Headers": [
-            {
-              "Name": "Content-Type",
-              "Values": [ "application/grpc" ],
-              "Mode": "ExactHeader"
-            }
-          ]
-        },
-        "Transforms": [
-          { "PathPattern": "/{**remainder}" }
-        ],
-        "Order": 101
-      }
+      "Metadata": {
+        "IsGrpc": "true" // Custom metadata to indicate gRPC handling if needed by middleware
+      },
+      "Transforms": [ // YARP transforms can manipulate requests/responses
+        { "RequestHeader": "X-Forwarded-Proto", "Set": "https" }, // If downstream gRPC expects HTTPS termination info
+        { "RequestHeader": "X-Forwarded-For", "Append": "{REMOTE_ADDRESS}" }
+      ]
     },
-    "Clusters": {
-      "management-grpc-cluster": {
-        "Destinations": {
-          "destination1": {
-            // Address should come from appsettings.json:ServiceEndpoints ideally
-            "Address": "http://management-service:5001" // Assuming gRPC on this port, HTTP scheme for YARP (will use HTTP/2)
-          }
-        },
-        "HttpClient": {
-          "Version": "2", // Use HTTP/2 for gRPC
-          "VersionPolicy": "RequestVersionOrHigher"
-        },
-        "HealthCheck": { // Example passive health check
-          "Passive": {
-            "Enabled": true,
-            "Policy": "TransportFailureRate",
-            "ReactivationPeriod": "00:00:10"
-          }
-        },
-        "LoadBalancingPolicy": "PowerOfTwoChoices"
+    // Example: gRPC route for OPC Client communication (if Gateway hosts a gRPC endpoint for it)
+    "opc-client-config-route": {
+      "ClusterId": "opc-client-comm-cluster",
+      "Match": {
+        "Path": "/OpcConfig.ConfigService/{**remainder}",
+        "Methods": [ "POST" ]
       },
-      "data-grpc-cluster": {
-        "Destinations": {
-          "destination1": {
-            "Address": "http://data-service:5002" // Assuming gRPC on this port
-          }
-        },
-        "HttpClient": {
-          "Version": "2",
-          "VersionPolicy": "RequestVersionOrHigher"
-        },
-        "HealthCheck": {
-          "Passive": {
-            "Enabled": true,
-            "Policy": "TransportFailureRate",
-            "ReactivationPeriod": "00:00:10"
-          }
-        },
-        "LoadBalancingPolicy": "RoundRobin"
+      "Metadata": { "IsGrpc": "true" }
+    },
+    // Example: A REST route handled by YARP (can co-exist or replace Ocelot for certain paths)
+    "yarp-rest-example-route": {
+      "ClusterId": "management-service-rest-cluster-yarp", // Different cluster for YARP handling
+      "Order": 100, // YARP routes can be ordered
+      "Match": {
+        "Path": "/yarp/api/management/{**remainder}" // Different upstream path to distinguish from Ocelot
+      },
+      "Transforms": [
+        { "PathRemovePrefix": "/yarp" } // Remove /yarp before sending to downstream
+      ]
+    }
+  },
+  // Clusters: Define groups of destination servers.
+  "Clusters": {
+    "data-service-grpc-cluster": {
+      "Destinations": {
+        "destination1": {
+          "Address": "http://data-service:50051" // Address of the gRPC DataService (using its gRPC port)
+        }
+      },
+      "HealthCheck": { // Optional: YARP can health check destinations
+        "Active": {
+          "Enabled": true,
+          "Interval": "00:00:10",
+          "Timeout": "00:00:05",
+          "Path": "/health/grpc", // Specific gRPC health check path if available
+          "Policy": "ConsecutiveFailures"
+        }
+      },
+      "HttpRequest": { // Specific settings for gRPC
+        "Version": "2", // HTTP/2 for gRPC
+        "VersionPolicy": "RequestVersionOrLower"
+      },
+      "LoadBalancingPolicy": "PowerOfTwoChoices" // Example load balancing
+    },
+    "opc-client-comm-cluster": {
+      "Destinations": {
+        "destination1": {
+          // This might route to an internal gRPC endpoint on the Gateway itself,
+          // or to a dedicated microservice handling OPC Client communications.
+          "Address": "http://integration-service:50052" // Example
+        }
+      },
+      "HttpRequest": { "Version": "2" }
+    },
+    "management-service-rest-cluster-yarp": {
+      "Destinations": {
+        "destination1": {
+          "Address": "http://management-service:80" // REST endpoint
+        }
+      },
+      "LoadBalancingPolicy": "LeastRequests",
+      "SessionAffinity": { // Example of session affinity if needed
+        "Enabled": false,
+        "Policy": "Cookie",
+        "AffinityKeyName": ".Yarp.Affinity"
       }
     }
   }
