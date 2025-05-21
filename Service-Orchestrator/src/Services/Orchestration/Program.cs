@@ -1,94 +1,106 @@
-using OrchestrationService.Configuration;
 using OrchestrationService.Extensions;
-using OrchestrationService.Infrastructure.WorkflowEngine;
-using Serilog;
+using OrchestrationService.Infrastructure.Persistence;
 using WorkflowCore.Interface;
+using Serilog;
 
-public class Program
+var builder = WebApplication.CreateBuilder(args);
+
+// Configure Serilog logging
+// Read Serilog configuration from appsettings.json
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .Enrich.FromLogContext()
+    .WriteTo.Console() // Default console sink, can be customized further in appsettings
+    .CreateBootstrapLogger(); // Use CreateBootstrapLogger for early logging, then CreateLogger later if needed
+
+builder.Host.UseSerilog((context, services, configuration) => configuration
+    .ReadFrom.Configuration(context.Configuration)
+    .ReadFrom.Services(services)
+    .Enrich.FromLogContext()
+    .WriteTo.Console()); // Configure Serilog fully once host is built
+
+Log.Information("Starting Orchestration Service...");
+
+try
 {
-    public static async Task Main(string[] args)
+    // Add services to the container.
+    builder.Services.AddControllers();
+    // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+    builder.Services.AddEndpointsApiExplorer();
+    builder.Services.AddSwaggerGen(c =>
     {
-        var builder = WebApplication.CreateBuilder(args);
+        c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo { Title = "Service-Orchestrator API", Version = "v1" });
+    });
 
-        // Configure Serilog for structured logging
-        // Assuming REPO-SHARED-UTILS provides a standard Serilog configuration extension,
-        // or configure it directly here. For now, a basic console logger.
-        Log.Logger = new LoggerConfiguration()
-            .ReadFrom.Configuration(builder.Configuration)
-            .Enrich.FromLogContext()
-            .WriteTo.Console()
-            .CreateBootstrapLogger(); // Use bootstrap logger for early DI issues
+    // Add custom services from extension methods
+    builder.Services.AddWorkflowServices(builder.Configuration);
+    builder.Services.AddHttpClients(builder.Configuration);
+    // The actual message bus integration for event handlers would be configured here.
+    // For now, AddEventHandlers might just register the IHostedService.
+    builder.Services.AddEventHandlers();
 
-        builder.Host.UseSerilog((context, services, configuration) => configuration
-            .ReadFrom.Configuration(context.Configuration)
-            .ReadFrom.Services(services)
-            .Enrich.FromLogContext()
-            .WriteTo.Console());
+    var app = builder.Build();
 
-        // Add services to the container.
-        builder.Services.AddOrchestratorServices(builder.Configuration);
-
-        builder.Services.AddControllers();
-        // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
-        builder.Services.AddEndpointsApiExplorer();
-        builder.Services.AddSwaggerGen(c =>
+    // Configure the HTTP request pipeline.
+    if (app.Environment.IsDevelopment())
+    {
+        app.UseSwagger();
+        app.UseSwaggerUI(c =>
         {
-            c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
-            {
-                Title = "Service Orchestrator API",
-                Version = "v1",
-                Description = "API for managing and interacting with workflows in the Service Orchestrator."
-            });
+            c.SwaggerEndpoint("/swagger/v1/swagger.json", "Service-Orchestrator API V1");
         });
 
-        var app = builder.Build();
-
-        // Configure the HTTP request pipeline.
-        if (app.Environment.IsDevelopment())
+        // Apply EF Core migrations or ensure DB is created in development
+        using (var scope = app.Services.CreateScope())
         {
-            app.UseSwagger();
-            app.UseSwaggerUI(c =>
+            var services = scope.ServiceProvider;
+            try
             {
-                c.SwaggerEndpoint("/swagger/v1/swagger.json", "Service Orchestrator API V1");
-            });
-        }
-
-        // Placeholder for Shared.Utilities exception handling middleware
-        // app.UseCustomExceptionHandler(); 
-
-        app.UseHttpsRedirection();
-
-        app.UseAuthorization();
-
-        app.MapControllers();
-
-        // Start Workflow Host
-        var workflowHost = app.Services.GetRequiredService<IWorkflowHost>();
-        workflowHost.RegisterWorkflows(app.Services); // Extension method to register workflows and activities
-        
-        // Ensure graceful shutdown for WorkflowCore
-        var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
-        lifetime.ApplicationStopping.Register(() =>
-        {
-            Log.Information("Application is stopping. Stopping Workflow Host...");
-            workflowHost.Stop();
-            Log.Information("Workflow Host stopped.");
-        });
-        
-        try
-        {
-            Log.Information("Starting web host and Workflow Host.");
-            await workflowHost.StartAsync(CancellationToken.None); // Start WorkflowCore Host
-            await app.RunAsync();
-        }
-        catch (Exception ex)
-        {
-            Log.Fatal(ex, "Host terminated unexpectedly");
-        }
-        finally
-        {
-            Log.Information("Shutting down Serilog...");
-            await Log.CloseAndFlushAsync();
+                var dbContext = services.GetRequiredService<OrchestrationDbContext>();
+                // In a real app, use Migrations: dbContext.Database.Migrate();
+                // For simplicity here, EnsureCreated is used. This is not suitable for production.
+                dbContext.Database.EnsureCreated();
+                Log.Information("Database checked/created successfully.");
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "An error occurred while migrating or creating the database.");
+            }
         }
     }
+
+    // app.UseHttpsRedirection(); // Typically handled by a reverse proxy in production
+
+    app.UseRouting();
+
+    app.UseAuthorization(); // Ensure this is after UseRouting and before MapControllers
+
+    app.MapControllers();
+
+    // Get and start the workflow host
+    var workflowHost = app.Services.GetRequiredService<IWorkflowHost>();
+    // The WorkflowHostExtensions.ConfigureWorkflowHost(workflowHost, app.Services) could be called here
+    // if it contained specific host configurations not handled by DI.
+    // For now, assuming all registration happens via DI.
+
+    await workflowHost.StartAsync(app.Lifetime.ApplicationStopping); // Pass CancellationToken
+
+    Log.Information("Orchestration Service host started.");
+
+    // Run the application
+    await app.RunAsync();
+
+    // Ensure workflow host stops on shutdown
+    Log.Information("Orchestration Service stopping. Attempting to stop workflow host...");
+    await workflowHost.StopAsync(CancellationToken.None); // Or use a proper CancellationToken for graceful shutdown
+    Log.Information("Workflow host stopped.");
+
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Orchestration Service host terminated unexpectedly.");
+}
+finally
+{
+    Log.CloseAndFlush();
 }
