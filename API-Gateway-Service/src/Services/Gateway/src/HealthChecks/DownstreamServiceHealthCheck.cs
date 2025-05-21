@@ -1,5 +1,5 @@
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Net.Http;
 using System.Threading;
@@ -9,109 +9,90 @@ namespace GatewayService.HealthChecks
 {
     /// <summary>
     /// Implements a health check for a specific downstream service.
-    /// Implements ASP.NET Core's IHealthCheck interface to monitor the health 
-    /// of a specific downstream microservice (e.g., Management Service, AI Service). 
-    /// This involves making a lightweight request to the downstream service's health endpoint.
+    /// Monitors the health of a downstream microservice (e.g., Management Service, AI Service)
+    /// by making a lightweight request to its health endpoint.
     /// </summary>
     public class DownstreamServiceHealthCheck : IHealthCheck
     {
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly string _serviceName;
-        private readonly string? _healthCheckUrl; // Can be fully qualified or relative
+        private readonly string _healthCheckUrl;
+        private readonly ILogger<DownstreamServiceHealthCheck> _logger;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DownstreamServiceHealthCheck"/> class.
         /// </summary>
-        /// <param name="httpClientFactory">The HTTP client factory.</param>
-        /// <param name="configuration">The application configuration.</param>
-        /// <param name="serviceName">The logical name of the service (used to look up its base URL).</param>
-        /// <param name="healthEndpointPath">The relative path to the health endpoint (e.g., "/health").</param>
+        /// <param name="httpClientFactory">The factory to create HTTP clients.</param>
+        /// <param name="serviceName">The name of the downstream service being checked.</param>
+        /// <param name="healthCheckUrl">The URL of the downstream service's health endpoint.</param>
+        /// <param name="logger">The logger.</param>
         public DownstreamServiceHealthCheck(
             IHttpClientFactory httpClientFactory,
-            IConfiguration configuration,
             string serviceName,
-            string healthEndpointPath = "/health") // Default health path
+            string healthCheckUrl,
+            ILogger<DownstreamServiceHealthCheck> logger)
         {
             _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
             _serviceName = serviceName ?? throw new ArgumentNullException(nameof(serviceName));
-            
-            // Construct the full health check URL from ServiceEndpoints configuration
-            var serviceBaseUrl = configuration[$"ServiceEndpoints:{serviceName}"];
-            if (string.IsNullOrEmpty(serviceBaseUrl))
+            _healthCheckUrl = healthCheckUrl ?? throw new ArgumentNullException(nameof(healthCheckUrl));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
+            if (!Uri.TryCreate(_healthCheckUrl, UriKind.Absolute, out _))
             {
-                // Alternatively, serviceName could be the full URL itself if configured that way
-                if (Uri.TryCreate(serviceName, UriKind.Absolute, out var parsedUri) && (parsedUri.Scheme == Uri.UriSchemeHttp || parsedUri.Scheme == Uri.UriSchemeHttps))
-                {
-                     _healthCheckUrl = serviceName; // serviceName is already a full URL
-                }
-                else
-                {
-                    throw new ArgumentException($"Base URL for service '{serviceName}' not found in ServiceEndpoints configuration and serviceName is not a valid URL.", nameof(serviceName));
-                }
-            }
-            else
-            {
-                 _healthCheckUrl = serviceBaseUrl.TrimEnd('/') + healthEndpointPath.TrimStart('~');
+                throw new ArgumentException("Health check URL must be an absolute URI.", nameof(healthCheckUrl));
             }
         }
-        
+
         /// <summary>
-        /// Initializes a new instance of the <see cref="DownstreamServiceHealthCheck"/> class with a direct URL.
+        /// Checks the health of the downstream service.
         /// </summary>
-        /// <param name="httpClientFactory">The HTTP client factory.</param>
-        /// <param name="directHealthCheckUrl">The fully qualified URL for the health check.</param>
-        public DownstreamServiceHealthCheck(
-            IHttpClientFactory httpClientFactory,
-            string directHealthCheckUrl)
-        {
-            _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
-            if (string.IsNullOrWhiteSpace(directHealthCheckUrl) || !Uri.IsWellFormedUriString(directHealthCheckUrl, UriKind.Absolute))
-            {
-                throw new ArgumentException("Direct health check URL must be a valid absolute URL.", nameof(directHealthCheckUrl));
-            }
-            _serviceName = new Uri(directHealthCheckUrl).Host; // Use host as service name
-            _healthCheckUrl = directHealthCheckUrl;
-        }
-
-
+        /// <param name="context">A context object associated with the current health check.</param>
+        /// <param name="cancellationToken">A <see cref="CancellationToken"/> that can be used to cancel the health check.</param>
+        /// <returns>A <see cref="Task"/> representing the asynchronous operation with a <see cref="HealthCheckResult"/>.</returns>
         public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
         {
-            if (string.IsNullOrEmpty(_healthCheckUrl))
-            {
-                 return HealthCheckResult.Unhealthy($"Health check URL for service '{_serviceName}' is not configured.");
-            }
-
-            var httpClient = _httpClientFactory.CreateClient("HealthCheckClient"); // Using a named client
+            _logger.LogDebug("Performing health check for downstream service: {ServiceName} at {HealthCheckUrl}", _serviceName, _healthCheckUrl);
 
             try
             {
-                var request = new HttpRequestMessage(HttpMethod.Get, _healthCheckUrl);
-                // Set a reasonable timeout for health checks
-                // This can also be configured on the HttpClient itself via HttpClientFactory options
-                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+                var httpClient = _httpClientFactory.CreateClient("DownstreamHealthCheckClient"); // Use a named client if specific policies apply
                 
-                var response = await httpClient.SendAsync(request, linkedCts.Token);
+                // Set a reasonable timeout for health checks
+                var healthCheckTimeout = TimeSpan.FromSeconds(5); 
+                var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                cts.CancelAfter(healthCheckTimeout);
+
+                var request = new HttpRequestMessage(HttpMethod.Get, _healthCheckUrl);
+                var response = await httpClient.SendAsync(request, cts.Token);
 
                 if (response.IsSuccessStatusCode)
                 {
-                    return HealthCheckResult.Healthy($"Downstream service '{_serviceName}' at '{_healthCheckUrl}' is healthy.");
+                    _logger.LogDebug("Downstream service {ServiceName} is healthy. Status: {StatusCode}", _serviceName, response.StatusCode);
+                    return HealthCheckResult.Healthy($"Downstream service '{_serviceName}' is healthy.");
                 }
                 else
                 {
+                    _logger.LogWarning("Downstream service {ServiceName} is unhealthy. Status: {StatusCode}, Reason: {ReasonPhrase}", 
+                        _serviceName, response.StatusCode, response.ReasonPhrase);
                     return HealthCheckResult.Unhealthy(
-                        $"Downstream service '{_serviceName}' at '{_healthCheckUrl}' is unhealthy. Status: {response.StatusCode}. Reason: {response.ReasonPhrase}");
+                        $"Downstream service '{_serviceName}' is unhealthy. Status: {response.StatusCode}. Reason: {response.ReasonPhrase}.",
+                        data: new Dictionary<string, object> { { "status_code", (int)response.StatusCode }, { "reason_phrase", response.ReasonPhrase } });
                 }
             }
-            catch (OperationCanceledException ex) when (ex.CancellationToken == timeoutCts.Token)
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
             {
-                 return HealthCheckResult.Unhealthy(
-                    $"Downstream service '{_serviceName}' at '{_healthCheckUrl}' timed out.", ex);
+                 _logger.LogWarning(ex, "Health check for downstream service {ServiceName} was canceled by the caller.", _serviceName);
+                return HealthCheckResult.Unhealthy($"Health check for '{_serviceName}' was canceled.", ex);
+            }
+            catch (OperationCanceledException ex) // Timeout
+            {
+                _logger.LogWarning(ex, "Health check for downstream service {ServiceName} timed out.", _serviceName);
+                return HealthCheckResult.Unhealthy($"Health check for '{_serviceName}' timed out.", ex);
             }
             catch (Exception ex)
             {
-                return HealthCheckResult.Unhealthy(
-                    $"Downstream service '{_serviceName}' at '{_healthCheckUrl}' is unhealthy due to an exception.", ex);
+                _logger.LogError(ex, "An error occurred while checking health of downstream service {ServiceName}.", _serviceName);
+                return HealthCheckResult.Unhealthy($"An error occurred while checking health of '{_serviceName}'.", ex);
             }
         }
     }

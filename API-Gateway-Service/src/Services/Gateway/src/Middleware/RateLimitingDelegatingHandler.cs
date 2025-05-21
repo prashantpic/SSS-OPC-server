@@ -1,96 +1,128 @@
 using GatewayService.Services;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Ocelot.Middleware;
 using System;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Caching.Distributed; // For DistributedCacheEntryOptions
 
 namespace GatewayService.Middleware
 {
     /// <summary>
     /// Provides advanced rate limiting capabilities.
-    /// Implements custom rate limiting logic for API Gateway requests, potentially using a distributed cache 
-    /// or more complex algorithms than Ocelot's built-in options. 
+    /// Implements custom rate limiting logic for API Gateway requests, potentially using a distributed cache
+    /// or more complex algorithms than Ocelot's built-in options.
     /// Can apply policies based on client ID, IP address, or other request characteristics.
     /// </summary>
     public class RateLimitingDelegatingHandler : DelegatingHandler
     {
-        private readonly ILogger<RateLimitingDelegatingHandler> _logger;
         private readonly IDistributedCacheService _cacheService;
-        // In a real scenario, rate limit policies would be configurable
-        // For simplicity, using fixed values here or they could be read from Ocelot route config metadata
-        private const int DefaultLimit = 100;
-        private readonly TimeSpan DefaultPeriod = TimeSpan.FromMinutes(1);
+        private readonly ILogger<RateLimitingDelegatingHandler> _logger;
+        private readonly IConfiguration _configuration;
 
         public RateLimitingDelegatingHandler(
+            IDistributedCacheService cacheService,
             ILogger<RateLimitingDelegatingHandler> logger,
-            IDistributedCacheService cacheService)
+            IConfiguration configuration)
         {
-            _logger = logger;
             _cacheService = cacheService;
+            _logger = logger;
+            _configuration = configuration;
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            var httpContext = request.Properties["HttpContext"] as HttpContext;
-            if (httpContext == null)
+            // This is a basic example. Real-world rate limiting can be much more complex.
+            // Ocelot has built-in rate limiting which might be preferred. This handler is for custom logic.
+
+            // Try to get HttpContext to extract client IP. This is not always straightforward in DelegatingHandlers.
+            // Ocelot might populate request.Properties["HttpContext"] or similar.
+            HttpContext httpContext = null;
+            if (request.Properties.TryGetValue("MS_HttpContext", out var context) && context is HttpContext)
             {
-                _logger.LogError("HttpContext is not available in HttpRequestMessage properties.");
-                return new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent("Error processing request.") };
+                httpContext = (HttpContext)context;
+            } 
+            else if (request.Properties.TryGetValue("HttpContext", out var contextOcelot) && contextOcelot is HttpContext) // Common in Ocelot
+            {
+                httpContext = (HttpContext)contextOcelot;
             }
+
+
+            var clientIp = httpContext?.Connection?.RemoteIpAddress?.ToString() ?? "unknown_ip";
+            var path = request.RequestUri?.AbsolutePath ?? "unknown_path";
             
-            var downstreamRoute = httpContext.Items.DownstreamRoute();
+            // Example: Simple policy lookup (could be more dynamic)
+            var policies = _configuration.GetSection("RateLimitingPolicies").Get<RateLimitPolicy[]>();
+            var policy = policies?.FirstOrDefault(p => path.StartsWith(p.Endpoint) || p.Endpoint == "*");
 
-            // Ocelot's built-in rate limiting might be enabled. This handler is for *custom* logic
-            // if Ocelot's options (EnableRateLimiting, ClientWhitelist, Period, PeriodTimespan, Limit in ocelot.json)
-            // are insufficient or need more dynamic handling.
-            // We'll assume this handler is applied only if Ocelot's built-in one is not used for this route,
-            // or if we want to augment it.
-
-            // Example: Use a custom rate limiting policy defined in route metadata or a global policy
-            // This example uses Client IP. A more robust solution might use API Key or User ID.
-            var clientIdentifier = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown_ip";
-            if (httpContext.User?.Identity?.IsAuthenticated == true)
+            if (policy == null)
             {
-                clientIdentifier = httpContext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? clientIdentifier;
+                _logger.LogDebug("No specific rate limit policy found for path {Path}. Proceeding.", path);
+                return await base.SendAsync(request, cancellationToken);
             }
 
-            // You could fetch policy details (limit, period) from DownstreamRoute.RateLimitOptions
-            // or custom metadata if Ocelot's built-in mechanism isn't fully utilized.
-            var rateLimitOptions = downstreamRoute.RateLimitOptions;
-            var limit = rateLimitOptions.EnableRateLimiting ? rateLimitOptions.Limit : DefaultLimit;
-            var period = rateLimitOptions.EnableRateLimiting && rateLimitOptions.PeriodTimespan > 0 
-                ? TimeSpan.FromSeconds(rateLimitOptions.PeriodTimespan) 
-                : DefaultPeriod;
+            var cacheKey = $"RateLimit_{policy.RuleName ?? "Default"}_{clientIp}_{path}";
+            var countString = await _cacheService.GetStringAsync(cacheKey, cancellationToken);
+            int currentCount = 0;
 
-            var cacheKey = $"RateLimit_{downstreamRoute.UpstreamPathTemplate.OriginalValue}_{clientIdentifier}";
-
-            var count = await _cacheService.GetJsonAsync<long?>(cacheKey);
-
-            if (count.HasValue && count.Value >= limit)
+            if (!string.IsNullOrEmpty(countString))
             {
-                _logger.LogWarning("Rate limit exceeded for client {ClientIdentifier} on route {Route}. Limit: {Limit}, Period: {Period}",
-                    clientIdentifier, downstreamRoute.UpstreamPathTemplate.OriginalValue, limit, period);
-                var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
-                response.Headers.Add("Retry-After", period.TotalSeconds.ToString()); // Or calculate remaining time
+                int.TryParse(countString, out currentCount);
+            }
+
+            if (currentCount >= policy.Limit)
+            {
+                _logger.LogWarning("Rate limit exceeded for client {ClientIp} on path {Path}. Policy: {PolicyName}, Limit: {Limit}, Period: {Period}", 
+                    clientIp, path, policy.RuleName, policy.Limit, policy.Period);
+                var response = new HttpResponseMessage((HttpStatusCode)429) // Too Many Requests
+                {
+                    ReasonPhrase = "Rate limit exceeded. Please try again later."
+                };
+                response.Headers.Add("Retry-After", policy.Period); // Inform client about the period
                 return response;
             }
 
-            var newCount = (count ?? 0) + 1;
-            var options = new DistributedCacheEntryOptions
+            currentCount++;
+            var periodTimeSpan = GetTimeSpanFromPeriod(policy.Period);
+            var cacheOptions = new DistributedCacheEntryOptions
             {
-                AbsoluteExpirationRelativeToNow = period
+                AbsoluteExpirationRelativeToNow = periodTimeSpan
             };
-            await _cacheService.SetJsonAsync(cacheKey, newCount, options, cancellationToken);
-            
-            _logger.LogDebug("Request count for client {ClientIdentifier} on route {Route} is {Count}/{Limit}",
-                clientIdentifier, downstreamRoute.UpstreamPathTemplate.OriginalValue, newCount, limit);
+
+            await _cacheService.SetStringAsync(cacheKey, currentCount.ToString(), cacheOptions, cancellationToken);
+            _logger.LogDebug("Rate limit check passed for client {ClientIp} on path {Path}. Count: {Count}", clientIp, path, currentCount);
 
             return await base.SendAsync(request, cancellationToken);
+        }
+        
+        private static TimeSpan GetTimeSpanFromPeriod(string period)
+        {
+            if (string.IsNullOrEmpty(period) || period.Length < 2) return TimeSpan.FromSeconds(1); // Default
+            
+            var value = int.Parse(period.Substring(0, period.Length - 1));
+            var unit = period.Substring(period.Length - 1).ToLower();
+
+            return unit switch
+            {
+                "s" => TimeSpan.FromSeconds(value),
+                "m" => TimeSpan.FromMinutes(value),
+                "h" => TimeSpan.FromHours(value),
+                "d" => TimeSpan.FromDays(value),
+                _ => TimeSpan.FromSeconds(1),
+            };
+        }
+
+        // Helper class to deserialize rate limiting policies from configuration
+        private class RateLimitPolicy
+        {
+            public string Endpoint { get; set; }
+            public string Period { get; set; }
+            public int Limit { get; set; }
+            public string RuleName { get; set; }
         }
     }
 }

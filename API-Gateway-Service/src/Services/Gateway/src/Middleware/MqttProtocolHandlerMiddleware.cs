@@ -3,185 +3,131 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System;
 using System.IO;
-using System.Net;
+using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-// using MQTTnet; // Placeholder for MQTT client library
-// using MQTTnet.Client; // Placeholder for MQTT client library
+// using MQTTnet.Client; // Example MQTT client library
+// using MQTTnet;
 
 namespace GatewayService.Middleware
 {
     /// <summary>
     /// Manages MQTT protocol translation or proxying.
-    /// Handles aspects of MQTT protocol translation. This could involve transforming HTTP requests 
-    /// into MQTT messages for publishing, or subscribing to MQTT topics and exposing them via HTTP/WebSockets. 
-    /// Relies on configuration for broker details and topic mappings.
+    /// Handles aspects of MQTT protocol translation. This could involve transforming HTTP requests
+    /// into MQTT messages for publishing, or subscribing to MQTT topics and exposing them
+    /// via HTTP/WebSockets. Relies on configuration for broker details and topic mappings.
     /// </summary>
     public class MqttProtocolHandlerMiddleware
     {
         private readonly RequestDelegate _next;
         private readonly ILogger<MqttProtocolHandlerMiddleware> _logger;
         private readonly IConfiguration _configuration;
-        // private IMqttClient _mqttClient; // Placeholder for MQTT client instance
-        // private bool _mqttClientConnected = false; // Placeholder
+        private readonly bool _isEnabled;
+        // private readonly IMqttClient _mqttClient; // Example: Inject a configured MQTT client instance
 
         public MqttProtocolHandlerMiddleware(
             RequestDelegate next,
             ILogger<MqttProtocolHandlerMiddleware> logger,
-            IConfiguration configuration)
+            IConfiguration configuration
+            /* IMqttClient mqttClient */) // TODO: Inject MQTT client if used
         {
             _next = next;
             _logger = logger;
             _configuration = configuration;
-            // InitializeMqttClient(); // Placeholder for MQTT client setup
+            _isEnabled = _configuration.GetSection("FeatureFlags").Get<string[]>()?.Contains("enableMqttProtocolHandler") ?? false;
+            // _mqttClient = mqttClient; // TODO: Initialize MQTT client
+
+            // if (_isEnabled && (_mqttClient == null || !_mqttClient.IsConnected))
+            // {
+            //     _logger.LogWarning("MQTT Protocol Handler is enabled but MQTT client is not connected or not provided.");
+            // }
         }
-
-        // private async void InitializeMqttClient()
-        // {
-        //     var mqttBrokerHost = _configuration["MqttBrokerConfig:Host"];
-        //     var mqttBrokerPort = _configuration.GetValue<int?>("MqttBrokerConfig:Port");
-        // 
-        //     if (string.IsNullOrEmpty(mqttBrokerHost) || !mqttBrokerPort.HasValue)
-        //     {
-        //         _logger.LogWarning("MQTT Broker configuration (Host/Port) is missing. MQTT features will be disabled.");
-        //         return;
-        //     }
-        // 
-        //     var factory = new MqttFactory();
-        //     _mqttClient = factory.CreateMqttClient();
-        // 
-        //     var options = new MqttClientOptionsBuilder()
-        //         .WithTcpServer(mqttBrokerHost, mqttBrokerPort.Value)
-        //         .WithClientId($"GatewayService_MqttMiddleware_{Guid.NewGuid()}")
-        //         // .WithCredentials(_configuration["MqttBrokerConfig:Username"], _configuration["MqttBrokerConfig:Password"]) // If auth is needed
-        //         .WithCleanSession()
-        //         .Build();
-        // 
-        //     _mqttClient.ConnectedAsync += async e =>
-        //     {
-        //         _logger.LogInformation("Successfully connected to MQTT broker at {Host}:{Port}", mqttBrokerHost, mqttBrokerPort.Value);
-        //         _mqttClientConnected = true;
-        //         // Potentially subscribe to topics here if the gateway needs to consume MQTT messages
-        //     };
-        //
-        //     _mqttClient.DisconnectedAsync += async e =>
-        //     {
-        //         _logger.LogWarning("Disconnected from MQTT broker. Will attempt to reconnect...");
-        //         _mqttClientConnected = false;
-        //         await Task.Delay(TimeSpan.FromSeconds(5)); // Wait before reconnecting
-        //         try
-        //         {
-        //             await _mqttClient.ConnectAsync(options, CancellationToken.None);
-        //         }
-        //         catch (Exception ex)
-        //         {
-        //             _logger.LogError(ex, "Failed to reconnect to MQTT broker.");
-        //         }
-        //     };
-        //
-        //     try
-        //     {
-        //         await _mqttClient.ConnectAsync(options, CancellationToken.None);
-        //     }
-        //     catch (Exception ex)
-        //     {
-        //         _logger.LogError(ex, "Initial connection to MQTT broker failed.");
-        //     }
-        // }
-
 
         public async Task InvokeAsync(HttpContext context)
         {
-            // Example: Handle HTTP POST to /mqtt/publish/{topic}
-            if (context.Request.Path.StartsWithSegments("/mqtt/publish", out var remainingPath) && context.Request.Method == HttpMethods.Post)
+            if (!_isEnabled)
             {
-                // if (!_mqttClientConnected || _mqttClient == null)
-                // {
-                //     _logger.LogError("MQTT client is not connected. Cannot publish message.");
-                //     context.Response.StatusCode = (int)HttpStatusCode.ServiceUnavailable;
-                //     await context.Response.WriteAsync("MQTT service is unavailable.");
-                //     return;
-                // }
-
-                var topic = remainingPath.Value?.TrimStart('/');
-                if (string.IsNullOrEmpty(topic))
-                {
-                    _logger.LogWarning("MQTT publish attempt with no topic specified.");
-                    context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
-                    await context.Response.WriteAsync("Topic must be specified in the URL path.");
-                    return;
-                }
-
-                string payload;
-                using (var reader = new StreamReader(context.Request.Body, Encoding.UTF8))
-                {
-                    payload = await reader.ReadToEndAsync();
-                }
-
-                if (string.IsNullOrEmpty(payload))
-                {
-                    _logger.LogWarning("MQTT publish attempt with empty payload for topic {Topic}.", topic);
-                    context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
-                    await context.Response.WriteAsync("Payload cannot be empty.");
-                    return;
-                }
-                
-                _logger.LogInformation("Received HTTP request to publish to MQTT. Topic: {MqttTopic}, Payload Length: {PayloadLength}", topic, payload.Length);
-                _logger.LogTrace("MQTT Payload: {MqttPayload}", payload);
-
-                // Placeholder for actual MQTT publish logic
-                // var message = new MqttApplicationMessageBuilder()
-                //     .WithTopic(topic)
-                //     .WithPayload(payload)
-                //     .WithRetainFlag(context.Request.Query.ContainsKey("retain")) // Example: control retain flag via query param
-                //     .Build();
-                //
-                // try
-                // {
-                //     var result = await _mqttClient.PublishAsync(message, CancellationToken.None);
-                //     if (result.ReasonCode == MqttClientPublishReasonCode.Success)
-                //     {
-                //         _logger.LogInformation("Successfully published message to MQTT topic {Topic}.", topic);
-                //         context.Response.StatusCode = (int)HttpStatusCode.OK;
-                //         await context.Response.WriteAsync("Message published successfully.");
-                //     }
-                //     else
-                //     {
-                //         _logger.LogError("Failed to publish message to MQTT topic {Topic}. Reason: {ReasonCode} - {ReasonString}", topic, result.ReasonCode, result.ReasonString);
-                //         context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
-                //         await context.Response.WriteAsync($"Failed to publish message: {result.ReasonString}");
-                //     }
-                // }
-                // catch (Exception ex)
-                // {
-                //     _logger.LogError(ex, "Exception occurred while publishing message to MQTT topic {Topic}.", topic);
-                //     context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
-                //     await context.Response.WriteAsync("An error occurred while publishing the message.");
-                // }
-                _logger.LogWarning("MqttProtocolHandlerMiddleware: MQTT client interaction is a placeholder.");
-                context.Response.StatusCode = (int)HttpStatusCode.OK;
-                await context.Response.WriteAsync("Message publish (placeholder) acknowledged.");
+                await _next(context);
                 return;
             }
 
-            // Placeholder for WebSocket to MQTT bridge
-            // if (context.Request.Path == "/mqtt-ws")
-            // {
-            //     if (context.WebSockets.IsWebSocketRequest)
-            //     {
-            //         _logger.LogInformation("WebSocket request received for MQTT bridge.");
-            //         // WebSocket webSocket = await context.WebSockets.AcceptWebSocketAsync();
-            //         // await HandleMqttWebSocketAsync(context, webSocket); // Implement this method
-            //         _logger.LogWarning("MqttProtocolHandlerMiddleware: WebSocket to MQTT bridge is a placeholder.");
-            //         return;
-            //     }
-            //     else
-            //     {
-            //         context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
-            //         await context.Response.WriteAsync("Not a WebSocket request.");
-            //         return;
-            //     }
-            // }
+            // Example: Define a specific path prefix for MQTT interactions via HTTP
+            PathString mqttHttpPrefix = "/gateway/mqtt"; 
+
+            if (context.Request.Path.StartsWithSegments(mqttHttpPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation("MqttProtocolHandlerMiddleware: Intercepting HTTP request for MQTT interaction at {Path}", context.Request.Path);
+                
+                // Example: Publish HTTP POST body to an MQTT topic
+                // The topic could be part of the path, e.g., /gateway/mqtt/publish/my/topic
+                if (context.Request.Method == HttpMethods.Post && context.Request.Path.StartsWithSegments($"{mqttHttpPrefix}/publish"))
+                {
+                    string topic = context.Request.Path.Value.Substring($"{mqttHttpPrefix}/publish/".Length);
+                    if (string.IsNullOrWhiteSpace(topic))
+                    {
+                        _logger.LogWarning("MQTT publish attempt with no topic specified in path.");
+                        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                        await context.Response.WriteAsync("MQTT topic must be specified in the path.");
+                        return;
+                    }
+
+                    string payload;
+                    using (var reader = new StreamReader(context.Request.Body, Encoding.UTF8))
+                    {
+                        payload = await reader.ReadToEndAsync();
+                    }
+
+                    _logger.LogDebug("Attempting to publish to MQTT topic '{Topic}' with payload: {Payload}", topic, payload);
+
+                    // if (_mqttClient != null && _mqttClient.IsConnected)
+                    // {
+                    //     var message = new MqttApplicationMessageBuilder()
+                    //         .WithTopic(topic)
+                    //         .WithPayload(payload)
+                    //         .WithRetainFlag() // Or other QoS settings
+                    //         .Build();
+                    //     try
+                    //     {
+                    //         var result = await _mqttClient.PublishAsync(message, CancellationToken.None);
+                    //         if(result.ReasonCode == MqttClientPublishReasonCode.Success) {
+                    //             _logger.LogInformation("Successfully published message to MQTT topic: {Topic}", topic);
+                    //             context.Response.StatusCode = StatusCodes.Status202Accepted;
+                    //             await context.Response.WriteAsync("Message accepted for MQTT publishing.");
+                    //         } else {
+                    //             _logger.LogError("Failed to publish message to MQTT topic {Topic}. Reason: {Reason}", topic, result.ReasonString);
+                    //             context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+                    //             await context.Response.WriteAsync($"Failed to publish to MQTT: {result.ReasonString}");
+                    //         }
+                    //     }
+                    //     catch (Exception ex)
+                    //     {
+                    //         _logger.LogError(ex, "Error publishing message to MQTT topic: {Topic}", topic);
+                    //         context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+                    //         await context.Response.WriteAsync("Error publishing to MQTT.");
+                    //     }
+                    // }
+                    // else
+                    // {
+                    //     _logger.LogError("MQTT client not available or not connected. Cannot publish message.");
+                    //     context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                    //     await context.Response.WriteAsync("MQTT service not available.");
+                    // }
+                    
+                    // Placeholder if no MQTT client logic
+                    _logger.LogWarning("MQTT client logic not fully implemented. Placeholder for publish to topic: {Topic}", topic);
+                    context.Response.StatusCode = StatusCodes.Status501NotImplemented;
+                    await context.Response.WriteAsync("MQTT publishing logic is a placeholder.");
+                    return;
+                }
+                
+                // TODO: Implement other MQTT interactions if needed (e.g., subscribe and expose via WebSockets or SSE)
+
+                // If no specific MQTT interaction matched for the prefix
+                _logger.LogDebug("No specific MQTT interaction matched for path {Path}", context.Request.Path);
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                await context.Response.WriteAsync("MQTT interaction endpoint not found.");
+                return;
+            }
 
             await _next(context);
         }
