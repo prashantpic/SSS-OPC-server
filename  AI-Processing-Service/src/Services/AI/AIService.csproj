@@ -1,0 +1,66 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>AIService</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ML" Version="3.0.0" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.17.3" />
+    <!-- Use Microsoft.ML.OnnxRuntime.Managed for a managed-only package or specific GPU packages if needed -->
+    <!-- e.g., <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.16.0" /> -->
+
+    <PackageReference Include="TensorFlow.NET" Version="0.110.1" />
+    <!-- SciSharp.TensorFlow.Redist is often required for TensorFlow.NET execution -->
+    <PackageReference Include="SciSharp.TensorFlow.Redist" Version="2.11.0" />
+    <!-- Or SciSharp.TensorFlow.Redist-Windows-GPU / SciSharp.TensorFlow.Redist-Linux-GPU for GPU support -->
+
+    <PackageReference Include="SharpCV" Version="0.1.0" /> 
+    <!-- Ensure this is the correct package or use a more common OpenCV wrapper like OpenCvSharp4 -->
+    <!-- Example: <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.9.0.20240103" /> -->
+    <!-- <PackageReference Include="OpenCvSharp4" Version="4.9.0.20240103" /> -->
+
+    <PackageReference Include="Spacy.Net" Version="1.0.8" />
+    <!-- spaCy models need to be downloaded separately, e.g., python -m spacy download en_core_web_sm -->
+
+    <PackageReference Include="Grpc.AspNetCore" Version="2.62.0" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.62.0" />
+    <PackageReference Include="Google.Protobuf" Version="3.26.1" />
+    <PackageReference Include="Grpc.Tools" Version="2.63.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.1" />
+    
+    <PackageReference Include="Serilog.AspNetCore" Version="8.0.1" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="5.0.1" />
+    <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />
+    <PackageReference Include="Serilog.Settings.Configuration" Version="8.0.0" />
+    <PackageReference Include="Serilog.Enrichers.Environment" Version="2.3.0" />
+    <PackageReference Include="Serilog.Enrichers.Process" Version="2.0.2" />
+    <PackageReference Include="Serilog.Enrichers.Thread" Version="3.1.0" />
+
+    <PackageReference Include="AutoMapper.Extensions.Microsoft.DependencyInjection" Version="12.0.1" />
+    <PackageReference Include="MediatR" Version="12.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- For gRPC Client code generation from .proto files (e.g., for DataService client) -->
+    <!--
+    <Protobuf Include="..\..\..\Contracts\DataService.proto" GrpcServices="Client" Link="Protos\DataService.proto" />
+    -->
+    <!-- For gRPC Service code generation for AIService itself -->
+    <Protobuf Include="Api\Proto\AIService.proto" GrpcServices="Server" Link="Protos\AIService.proto" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Shared\Shared.Utils\Shared.Utils.csproj" Condition="Exists('..\..\Shared\Shared.Utils\Shared.Utils.csproj')" />
+    <!-- Add reference to REPO-SECURITY if it's a library providing middleware/attributes -->
+    <!-- <ProjectReference Include="..\..\Security\Security.Core\Security.Core.csproj" Condition="Exists('..\..\Security\Security.Core\Security.Core.csproj')" /> -->
+  </ItemGroup>
+
+</Project>
