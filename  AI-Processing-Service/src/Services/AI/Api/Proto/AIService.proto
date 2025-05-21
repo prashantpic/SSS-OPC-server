@@ -1,0 +1,148 @@
+syntax = "proto3";
+
+package AIServiceGrpc;
+
+import "google/protobuf/struct.proto"; // For flexible input/output data
+import "google/protobuf/timestamp.proto"; // For timestamps
+
+option csharp_namespace = "AIService.Grpc";
+
+// Service for AI processing tasks
+// REQ-SAP-003: gRPC services
+// REQ-SAP-004: Data Serialization (Protobuf for gRPC)
+// REQ-SAP-005: API Documentation (this .proto file)
+service AIService {
+    // Gets a predictive maintenance prediction
+    // REQ-7-001: Predictive Maintenance Analysis
+    rpc GetPrediction (PredictionRequest) returns (PredictionResponse);
+
+    // Detects anomalies in data
+    // REQ-7-008: Anomaly Detection
+    rpc DetectAnomalies (AnomalyDetectionRequest) returns (AnomalyDetectionResponse);
+
+    // Processes a natural language query
+    // REQ-7-013: Natural Language Query Processing
+    rpc ProcessNlq (NlqRequest) returns (NlqResponse);
+
+    // Deploys an AI model to edge devices
+    // REQ-8-001: Edge AI Model Deployment
+    rpc DeployModelToEdge (EdgeDeploymentRequest) returns (EdgeDeploymentResponse);
+
+    // Uploads an AI model (demonstrative, might be more complex using streaming for file)
+    // REQ-7-004, REQ-7-005
+    rpc UploadModel(ModelUploadRequest) returns (ModelUploadResponse);
+
+    // Submits feedback for an AI model
+    // REQ-7-005, REQ-7-011
+    rpc SubmitModelFeedback(ModelFeedbackRequest) returns (ModelFeedbackResponse);
+}
+
+// --- Predictive Maintenance Messages ---
+// REQ-7-001, REQ-7-002
+message PredictionRequest {
+    string model_id = 1; // Optional: specific model ID
+    google.protobuf.Struct input_data = 2; // Flexible input data (features)
+}
+
+message PredictionResponse {
+    string prediction_id = 1;
+    string model_id_used = 2;
+    google.protobuf.Timestamp timestamp = 3;
+    google.protobuf.Struct results = 4; // Predicted values (e.g., RUL, probability)
+}
+
+// --- Anomaly Detection Messages ---
+// REQ-7-008, REQ-7-009
+message AnomalyDetectionRequest {
+    string model_id = 1; // Optional: specific model ID
+    google.protobuf.Struct input_data = 2; // Can be a list of structs if processing a batch/sequence
+    // For a list, consider: repeated google.protobuf.Struct input_sequence_data = 2;
+}
+
+message AnomalyDetail {
+    google.protobuf.Timestamp timestamp = 1;
+    double score = 2;
+    string description = 3;
+    string sensor_id = 4; // Optional
+    google.protobuf.Value value = 5; // The value that was anomalous
+}
+
+message AnomalyDetectionResponse {
+    string model_id_used = 1;
+    google.protobuf.Timestamp timestamp = 2;
+    repeated AnomalyDetail detected_anomalies = 3;
+}
+
+// --- NLQ Processing Messages ---
+// REQ-7-013, REQ-7-014
+message NlqRequest {
+    string query_text = 1;
+    string user_id = 2; // Optional
+    string session_id = 3; // Optional
+    map<string, string> context_data = 4; // Optional context
+}
+
+message NlqEntity {
+    string type = 1;
+    string value = 2;
+    int32 start_index = 3;
+    int32 end_index = 4;
+    string raw_value = 5;
+}
+
+message NlqResponse {
+    string original_query = 1;
+    string processed_query = 2;
+    string intent = 3;
+    repeated NlqEntity entities = 4;
+    double confidence_score = 5;
+    string response_message = 6; // Optional: A direct textual response or summary
+}
+
+// --- Edge Deployment Messages ---
+// REQ-8-001
+message EdgeDeploymentRequest {
+    string model_id = 1;
+    string model_version = 2;
+    repeated string target_device_ids = 3;
+    map<string, string> deployment_configuration = 4; // Optional: specific config for deployment
+}
+
+message EdgeDeploymentResponse {
+    string deployment_id = 1; // ID to track this deployment task
+    string status_message = 2; // e.g., "Deployment initiated"
+    bool success = 3;
+}
+
+// --- Model Management Messages ---
+message ModelUploadRequest {
+    string model_name = 1;
+    string model_version = 2;
+    string model_type = 3; // e.g., "PredictiveMaintenance", "AnomalyDetection"
+    string model_format = 4; // e.g., "ONNX", "TensorFlowLite"
+    string description = 5;
+    bytes model_file_content = 6; // For smaller models; for larger, streaming RPC is better
+    string file_name = 7;
+}
+
+message ModelUploadResponse {
+    string model_id = 1;
+    string message = 2;
+    bool success = 3;
+}
+
+message ModelFeedbackRequest {
+    string model_id = 1;
+    string prediction_id = 2; // Optional, if feedback is for a specific prediction
+    google.protobuf.Struct input_data_context = 3; // Data that led to the prediction
+    google.protobuf.Struct actual_outcome = 4; // Ground truth or corrected label
+    string feedback_text = 5;
+    string user_id = 6;
+    google.protobuf.Timestamp timestamp = 7;
+}
+
+message ModelFeedbackResponse {
+    string feedback_id = 1;
+    string message = 2;
+    bool success = 3;
+}
