@@ -1,249 +1,227 @@
-using IntegrationService.Configuration;
-using IntegrationService.Services;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 using System;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-// using RabbitMQ.Client; // Example for RabbitMQ
-// using RabbitMQ.Client.Events; // Example for RabbitMQ
-// using Confluent.Kafka; // Example for Kafka
+using IntegrationService.Interfaces; // For placeholder Integration Services
+using Microsoft.Extensions.DependencyInjection;
+
 
 namespace IntegrationService.Messaging
 {
-    /// <summary>
-    /// Consumes messages from a configured message queue (e.g., RabbitMQ, Kafka) which contain OPC data 
-    /// (telemetry, events, alarms) published by the Core OPC Client Service or another upstream service. 
-    /// Upon receiving a message, it dispatches the data to the relevant integration services 
-    /// (`IoTIntegrationService`, `BlockchainIntegrationService`, `DigitalTwinIntegrationService`) 
-    /// based on the data content and configured integration rules.
-    /// </summary>
+    // Placeholder for OPC Data Payload DTO
+    public record OpcDataPayload(string TagId, DateTime Timestamp, object Value, string? Quality, string? SourceNodeId);
+
+    // Placeholder for Message Queue Settings
+    public class MessageQueueSettings
+    {
+        public string HostName { get; set; } = "localhost";
+        public string UserName { get; set; } = "guest";
+        public string Password { get; set; } = "guest";
+        public string QueueName { get; set; } = "opc-data-input";
+        public string ExchangeName { get; set; } = ""; // Default exchange if empty
+        public string RoutingKey { get; set; } = "opc-data-input"; // Use queue name if default exchange
+    }
+
+
     public class OpcDataConsumer : BackgroundService
     {
         private readonly ILogger<OpcDataConsumer> _logger;
-        private readonly IServiceProvider _serviceProvider; // To resolve scoped services per message
-        private readonly IntegrationSettings _settings;
-        private readonly FeatureFlags _featureFlags;
-
-        // --- Placeholder for Message Queue Client ---
-        // Example for RabbitMQ:
-        // private IConnection _connection;
-        // private IModel _channel;
-        // Example for Kafka:
-        // private IConsumer<Ignore, string> _consumer;
+        private readonly IServiceProvider _serviceProvider;
+        private readonly MessageQueueSettings _mqSettings;
+        private IConnection? _connection;
+        private IModel? _channel;
 
         public OpcDataConsumer(
             ILogger<OpcDataConsumer> logger,
             IServiceProvider serviceProvider,
-            IOptions<IntegrationSettings> settings,
-            IOptions<FeatureFlags> featureFlags)
+            IOptions<MessageQueueSettings> mqSettings)
         {
-            _logger = logger;
-            _serviceProvider = serviceProvider;
-            _settings = settings.Value;
-            _featureFlags = featureFlags.Value;
-
-            if (string.IsNullOrEmpty(_settings.OpcDataInputQueueName))
-            {
-                _logger.LogWarning("OpcDataInputQueueName is not configured. OpcDataConsumer will be disabled.");
-            }
-            else
-            {
-                _logger.LogInformation("OpcDataConsumer initialized to listen on queue: {QueueName}", _settings.OpcDataInputQueueName);
-            }
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
+            _mqSettings = mqSettings?.Value ?? throw new ArgumentNullException(nameof(mqSettings));
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            if (string.IsNullOrEmpty(_settings.OpcDataInputQueueName))
-            {
-                _logger.LogInformation("OpcDataConsumer ExecuteAsync: Disabled due to missing OpcDataInputQueueName configuration.");
-                return;
-            }
-
-            _logger.LogInformation("OpcDataConsumer starting execution. Listening to queue: {QueueName}", _settings.OpcDataInputQueueName);
+            _logger.LogInformation("OpcDataConsumer starting.");
             stoppingToken.Register(() => _logger.LogInformation("OpcDataConsumer is stopping."));
-
-            // --- Placeholder for actual message queue connection and consumption loop ---
-            // This section would contain logic specific to the chosen message broker (RabbitMQ, Kafka, Azure Service Bus, etc.)
-            // For demonstration, a simple loop with a delay simulates message arrival.
-            
-            // Example RabbitMQ setup (conceptual):
-            /*
-            var factory = new ConnectionFactory() { HostName = "localhost" }; // Configure from settings
-            _connection = factory.CreateConnection();
-            _channel = _connection.CreateModel();
-            _channel.QueueDeclare(queue: _settings.OpcDataInputQueueName, durable: true, exclusive: false, autoDelete: false, arguments: null);
-            var consumer = new EventingBasicConsumer(_channel);
-            consumer.Received += async (model, ea) => {
-                var body = ea.Body.ToArray();
-                var message = System.Text.Encoding.UTF8.GetString(body);
-                await ProcessMessageAsync(message, stoppingToken);
-                _channel.BasicAck(ea.DeliveryTag, false); // Acknowledge message
-            };
-            _channel.BasicConsume(queue: _settings.OpcDataInputQueueName, autoAck: false, consumer: consumer);
-            while (!stoppingToken.IsCancellationRequested) { await Task.Delay(1000, stoppingToken); } // Keep alive
-            */
 
             while (!stoppingToken.IsCancellationRequested)
             {
-                _logger.LogDebug("OpcDataConsumer polling for messages (placeholder loop)...");
                 try
                 {
-                    // --- Simulate receiving a message ---
-                    // In a real implementation, this would be a blocking call to the message queue client
-                    // or an event-driven callback.
-                    string? simulatedMessage = GetSimulatedMessage(); // Placeholder
-
-                    if (simulatedMessage != null)
+                    if (_connection == null || !_connection.IsOpen)
                     {
-                        _logger.LogInformation("OpcDataConsumer received simulated message.");
-                        await ProcessMessageAsync(simulatedMessage, stoppingToken);
-                    }
-                    else
-                    {
-                        _logger.LogTrace("No simulated message received this interval.");
+                        ConnectToRabbitMQ(stoppingToken);
                     }
 
-                    await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken); // Simulate polling interval
+                    if (_channel != null && _channel.IsOpen)
+                    {
+                        var consumer = new EventingBasicConsumer(_channel);
+                        consumer.Received += async (model, ea) =>
+                        {
+                            var body = ea.Body.ToArray();
+                            var message = Encoding.UTF8.GetString(body);
+                            _logger.LogDebug("Received message: {Message}", message);
+
+                            try
+                            {
+                                await ProcessMessageAsync(message, stoppingToken);
+                                _channel.BasicAck(ea.DeliveryTag, false);
+                            }
+                            catch (JsonException jsonEx)
+                            {
+                                _logger.LogError(jsonEx, "Failed to deserialize message: {Message}. Sending to dead-letter queue or NACKing.", message);
+                                _channel.BasicNack(ea.DeliveryTag, false, false); // false for requeue: do not requeue malformed messages
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "Error processing message: {Message}. NACKing and requeueing.", message);
+                                _channel.BasicNack(ea.DeliveryTag, false, true); // true for requeue: might be a transient issue
+                                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); // Delay before retrying connection or processing
+                            }
+                        };
+
+                        _channel.BasicConsume(queue: _mqSettings.QueueName, autoAck: false, consumer: consumer);
+                        _logger.LogInformation("Consumer started on queue '{QueueName}'. Waiting for messages.", _mqSettings.QueueName);
+
+                        // Keep the service alive while listening
+                        while (!stoppingToken.IsCancellationRequested && _channel.IsOpen)
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
+                        }
+                    }
                 }
-                catch (OperationCanceledException)
+                catch (RabbitMQ.Client.Exceptions.BrokerUnreachableException ex)
                 {
-                    _logger.LogInformation("OpcDataConsumer execution cancelled.");
-                    break; // Exit loop if cancellation requested
+                    _logger.LogError(ex, "Cannot connect to RabbitMQ. Retrying in 5 seconds...");
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error in OpcDataConsumer execution loop. Retrying after delay.");
-                    await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken); // Delay before retrying loop
+                    _logger.LogError(ex, "An unhandled exception occurred in OpcDataConsumer. Retrying in 5 seconds...");
+                }
+                finally
+                {
+                    if (!stoppingToken.IsCancellationRequested)
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); // Delay before retrying connection loop
+                    }
                 }
             }
-
-            _logger.LogInformation("OpcDataConsumer execution finished.");
-            // Clean up connections if any (e.g., _channel?.Close(); _connection?.Close();)
+            _logger.LogInformation("OpcDataConsumer ExecuteAsync loop finishing.");
         }
 
-        private string? GetSimulatedMessage()
+        private void ConnectToRabbitMQ(CancellationToken stoppingToken)
         {
-            // Simulate occasional messages
-            if (Random.Shared.Next(0, 3) == 0) // ~33% chance of message
+            if (stoppingToken.IsCancellationRequested) return;
+
+            var factory = new ConnectionFactory()
             {
-                 var opcPayload = new
-                {
-                    TagId = "Simulated.Pump.Speed",
-                    Value = Random.Shared.Next(50, 150) + Random.Shared.NextDouble(),
-                    Timestamp = DateTimeOffset.UtcNow,
-                    Quality = "Good",
-                    SourceSystem = "OPC_SIM_CLIENT_01"
-                };
-                return JsonSerializer.Serialize(opcPayload);
+                HostName = _mqSettings.HostName,
+                UserName = _mqSettings.UserName,
+                Password = _mqSettings.Password,
+                DispatchConsumersAsync = true // Important for async consumer event handlers
+            };
+
+            _logger.LogInformation("Attempting to connect to RabbitMQ host: {HostName}", _mqSettings.HostName);
+            _connection = factory.CreateConnection();
+            _channel = _connection.CreateModel();
+
+            _channel.QueueDeclare(queue: _mqSettings.QueueName,
+                                 durable: true,
+                                 exclusive: false,
+                                 autoDelete: false,
+                                 arguments: null);
+            
+            // If using an exchange other than default, declare it and bind the queue
+            if (!string.IsNullOrEmpty(_mqSettings.ExchangeName) && _mqSettings.ExchangeName != "")
+            {
+                _channel.ExchangeDeclare(exchange: _mqSettings.ExchangeName, type: ExchangeType.Topic, durable: true); // Or other type as needed
+                _channel.QueueBind(queue: _mqSettings.QueueName,
+                                   exchange: _mqSettings.ExchangeName,
+                                   routingKey: _mqSettings.RoutingKey); // Use a specific routing key or # for all
+                 _logger.LogInformation("Queue '{QueueName}' bound to exchange '{ExchangeName}' with routing key '{RoutingKey}'", _mqSettings.QueueName, _mqSettings.ExchangeName, _mqSettings.RoutingKey);
+            } else {
+                 _logger.LogInformation("Queue '{QueueName}' declared, using default exchange.", _mqSettings.QueueName);
             }
-            return null;
+
+
+            _logger.LogInformation("Successfully connected to RabbitMQ and channel opened.");
         }
 
-        private async Task ProcessMessageAsync(string message, CancellationToken stoppingToken)
+        private async Task ProcessMessageAsync(string message, CancellationToken cancellationToken)
         {
-            _logger.LogDebug("Processing message: {MessageContent}", message);
-
-            // --- Placeholder for message deserialization and content-based routing ---
-            // Assume message is JSON. Attempt to parse critical fields for routing.
-            object? opcDataPayload;
-            string sourceId = "UnknownSource";
-            DateTimeOffset timestamp = DateTimeOffset.UtcNow;
-            object? metadata = null; // Example
-
+            OpcDataPayload? payload;
             try
             {
-                // This is a very basic parsing example. A more robust DTO from a shared library is preferred.
-                using var jsonDoc = JsonDocument.Parse(message);
-                var root = jsonDoc.RootElement;
-
-                if (root.TryGetProperty("TagId", out var tagIdElement)) sourceId = tagIdElement.GetString() ?? sourceId;
-                if (root.TryGetProperty("Timestamp", out var tsElement) && DateTimeOffset.TryParse(tsElement.GetString(), out var parsedTs)) timestamp = parsedTs;
-                
-                // For payload, you might take a specific property or the whole object
-                opcDataPayload = root.TryGetProperty("Value", out var valElement) ? (object?)valElement : root.Clone(); // Example
-                
-                // Example metadata extraction
-                if (root.TryGetProperty("Quality", out var qElement)) metadata = new { Quality = qElement.GetString() };
-
-                _logger.LogInformation("Successfully deserialized message. SourceId: {SourceId}, Timestamp: {Timestamp}", sourceId, timestamp);
+                payload = JsonSerializer.Deserialize<OpcDataPayload>(message);
             }
-            catch (JsonException jex)
+            catch (JsonException ex)
             {
-                _logger.LogError(jex, "Failed to deserialize message as JSON: {MessageContent}", message);
-                // Handle poison message (e.g., log, move to dead-letter queue)
-                return;
+                _logger.LogError(ex, "Failed to deserialize OPC data payload: {Message}", message);
+                // Message will be NACKed by the caller
+                throw; 
             }
-             catch (Exception ex)
+
+            if (payload == null)
             {
-                _logger.LogError(ex, "Unexpected error during message deserialization: {MessageContent}", message);
-                return;
+                _logger.LogWarning("Deserialized payload is null for message: {Message}", message);
+                // Message will be NACKed by the caller
+                throw new ArgumentNullException(nameof(payload), "Deserialized payload cannot be null.");
             }
 
+            _logger.LogInformation("Processing OPC Data for TagId: {TagId}, Timestamp: {Timestamp}", payload.TagId, payload.Timestamp);
 
-            // Create a new scope to resolve services for this message processing
-            using (var scope = _serviceProvider.CreateScope())
+            // Scope services for processing this message
+            using var scope = _serviceProvider.CreateScope();
+
+            // Placeholder: Dispatch to relevant integration services
+            // These services (IIoTIntegrationService, etc.) would be defined elsewhere and registered.
+            // For now, we just log. Actual dispatch logic would depend on payload content and configuration.
+
+            var iotIntegrationService = scope.ServiceProvider.GetService<IIoTIntegrationService>(); // Assuming IIoTIntegrationService interface
+            if (iotIntegrationService != null)
             {
-                // --- Dispatch to IoTIntegrationService ---
-                if (_featureFlags.EnableMqttIntegration || _featureFlags.EnableAmqpIntegration || _featureFlags.EnableHttpIoTIntegration)
-                {
-                    try
-                    {
-                        var iotService = scope.ServiceProvider.GetRequiredService<IoTIntegrationService>();
-                        _logger.LogDebug("Dispatching message to IoTIntegrationService for source: {SourceId}", sourceId);
-                        await iotService.ProcessIncomingOpcDataAsync(opcDataPayload ?? message); // Pass payload or full message
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Error dispatching message to IoTIntegrationService for source: {SourceId}", sourceId);
-                    }
-                }
-
-                // --- Dispatch to BlockchainIntegrationService ---
-                if (_featureFlags.EnableBlockchainLogging)
-                {
-                    try
-                    {
-                        var blockchainService = scope.ServiceProvider.GetRequiredService<BlockchainIntegrationService>();
-                        _logger.LogDebug("Dispatching message to BlockchainIntegrationService for source: {SourceId}", sourceId);
-                        await blockchainService.ProcessDataForBlockchainLoggingAsync(opcDataPayload ?? message, sourceId, timestamp, metadata);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Error dispatching message to BlockchainIntegrationService for source: {SourceId}", sourceId);
-                    }
-                }
-
-                // --- Dispatch to DigitalTwinIntegrationService (for real-time updates, if applicable) ---
-                // Note: DigitalTwinSyncService handles periodic sync. This would be for event-driven updates.
-                if (_featureFlags.EnableDigitalTwinSync) // Assuming this flag also covers real-time if implemented
-                {
-                    // If DigitalTwinIntegrationService has a method for real-time updates:
-                    // try
-                    // {
-                    //     var dtService = scope.ServiceProvider.GetRequiredService<DigitalTwinIntegrationService>();
-                    //      _logger.LogDebug("Dispatching message to DigitalTwinIntegrationService (real-time) for source: {SourceId}", sourceId);
-                    //     await dtService.ProcessRealtimeTwinUpdateAsync(opcDataPayload ?? message, sourceId, timestamp); // Example method
-                    // }
-                    // catch (Exception ex)
-                    // {
-                    //      _logger.LogError(ex, "Error dispatching message to DigitalTwinIntegrationService (real-time) for source: {SourceId}", sourceId);
-                    // }
-                     _logger.LogTrace("Skipping real-time dispatch to DigitalTwinIntegrationService from OpcDataConsumer (primarily uses background sync).");
-                }
+                // Example: await iotIntegrationService.ProcessDataAsync(payload, cancellationToken);
+                _logger.LogDebug("Potentially dispatching to IoTIntegrationService.");
             }
-            _logger.LogDebug("Finished processing message for source {SourceId}.", sourceId);
+
+            var blockchainIntegrationService = scope.ServiceProvider.GetService<IBlockchainIntegrationService>(); // Assuming IBlockchainIntegrationService interface
+            if (blockchainIntegrationService != null /* && IsCritical(payload) */)
+            {
+                // Example: await blockchainIntegrationService.ProcessDataAsync(payload, cancellationToken);
+                _logger.LogDebug("Potentially dispatching to BlockchainIntegrationService.");
+            }
+
+            var digitalTwinIntegrationService = scope.ServiceProvider.GetService<IDigitalTwinIntegrationService>(); // Assuming IDigitalTwinIntegrationService interface
+            if (digitalTwinIntegrationService != null)
+            {
+                // Example: await digitalTwinIntegrationService.ProcessDataAsync(payload, cancellationToken);
+                _logger.LogDebug("Potentially dispatching to DigitalTwinIntegrationService.");
+            }
+            
+            // Simulate work
+            await Task.Delay(10, cancellationToken); 
         }
 
-        public override Task StopAsync(CancellationToken cancellationToken)
+        public override async Task StopAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("OpcDataConsumer StopAsync called.");
-            // Perform cleanup of message queue client resources here
-            // Example: _channel?.Close(); _connection?.Close(); _consumer?.Close();
-            return base.StopAsync(cancellationToken);
+            _logger.LogInformation("OpcDataConsumer is stopping.");
+            _channel?.Close();
+            _connection?.Close();
+            await base.StopAsync(stoppingToken);
         }
     }
+
+    // Placeholder interfaces for services that OpcDataConsumer would dispatch to.
+    // These would be defined in their respective service implementation projects/files.
+    public interface IIoTIntegrationService { Task ProcessDataAsync(OpcDataPayload data, CancellationToken token); }
+    public interface IBlockchainIntegrationService { Task ProcessDataAsync(OpcDataPayload data, CancellationToken token); }
+    public interface IDigitalTwinIntegrationService { Task ProcessDataAsync(OpcDataPayload data, CancellationToken token); }
 }

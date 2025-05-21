@@ -1,176 +1,111 @@
-using IntegrationService.Configuration;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using System.Collections.Generic;
-using System.Linq;
-// using Microsoft.AspNetCore.Authorization; // Optional: for securing endpoints
+using System.Threading.Tasks;
+using System.ComponentModel.DataAnnotations;
+
+// Assuming AuthenticationConfigDto is defined in IoTConfigController.cs or a shared DTO location
+using IntegrationService.Controllers; // For AuthenticationConfigDto
 
 namespace IntegrationService.Controllers
 {
-    /// <summary>
-    /// API controller for managing Digital Twin integration configurations.
-    /// Exposes HTTP endpoints for CRUD operations on Digital Twin integration configurations. 
-    /// Allows managing connection details, data synchronization frequency, target Digital Twin model versions, and other related settings.
-    /// </summary>
+    // Placeholder for DigitalTwinConfig DTO - Ideally, this would be in IntegrationService.Configuration
+    public record DigitalTwinConfigDto(
+        [Required] string Id,
+        [Required] string Endpoint,
+        [Required] AuthenticationConfigDto Authentication, // Reusing from IoT
+        int SyncFrequencySeconds = 300,
+        string? DigitalTwinModelId = null,
+        string? MappingRuleId = null
+    );
+
+    // Placeholder interface for the service handling configuration logic
+    public interface IDigitalTwinConfigurationService
+    {
+        Task<IEnumerable<DigitalTwinConfigDto>> GetAllAsync();
+        Task<DigitalTwinConfigDto?> GetByIdAsync(string id);
+        Task<DigitalTwinConfigDto> CreateAsync(DigitalTwinConfigDto config);
+        Task<DigitalTwinConfigDto?> UpdateAsync(string id, DigitalTwinConfigDto config);
+        Task<bool> DeleteAsync(string id);
+    }
+
     [ApiController]
-    [Route("api/integrations/digitaltwin/configs")]
-    // [Authorize] // Example: Secure all endpoints in this controller
+    [Route("api/digitaltwin/config")]
     public class DigitalTwinConfigController : ControllerBase
     {
+        private readonly IDigitalTwinConfigurationService _configService;
         private readonly ILogger<DigitalTwinConfigController> _logger;
-        private readonly IOptionsSnapshot<IntegrationSettings> _settingsSnapshot;
 
-        // In a production scenario, these operations would typically call a dedicated service
-        // that interacts with a persistent configuration store (e.g., REPO-DATA-SERVICE).
-        // For this example, we'll read from IOptionsSnapshot and simulate writes.
-
-        public DigitalTwinConfigController(ILogger<DigitalTwinConfigController> logger, IOptionsSnapshot<IntegrationSettings> settingsSnapshot)
+        public DigitalTwinConfigController(IDigitalTwinConfigurationService configService, ILogger<DigitalTwinConfigController> logger)
         {
-            _logger = logger;
-            _settingsSnapshot = settingsSnapshot;
-            _logger.LogInformation("DigitalTwinConfigController initialized.");
+            _configService = configService ?? throw new ArgumentNullException(nameof(configService));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        /// <summary>
-        /// Gets all configured Digital Twin integrations.
-        /// </summary>
-        /// <returns>A list of Digital Twin configurations.</returns>
         [HttpGet]
-        [ProducesResponseType(typeof(IEnumerable<DigitalTwinConfig>), 200)]
-        public IActionResult GetAllDigitalTwins()
+        public async Task<ActionResult<IEnumerable<DigitalTwinConfigDto>>> GetTwinConfigs()
         {
-            _logger.LogInformation("Attempting to retrieve all Digital Twin configurations.");
-            var twins = _settingsSnapshot.Value.DigitalTwinSettings?.Twins ?? new List<DigitalTwinConfig>();
-            _logger.LogInformation("Returning {Count} Digital Twin configurations.", twins.Count);
-            return Ok(twins);
+            _logger.LogInformation("Getting all Digital Twin configurations.");
+            var configs = await _configService.GetAllAsync();
+            return Ok(configs);
         }
 
-        /// <summary>
-        /// Gets a specific Digital Twin integration configuration by ID.
-        /// </summary>
-        /// <param name="id">The unique identifier of the Digital Twin configuration.</param>
-        /// <returns>The Digital Twin configuration if found; otherwise, NotFound.</returns>
         [HttpGet("{id}")]
-        [ProducesResponseType(typeof(DigitalTwinConfig), 200)]
-        [ProducesResponseType(404)]
-        public IActionResult GetDigitalTwinById(string id)
+        public async Task<ActionResult<DigitalTwinConfigDto>> GetTwinConfigById(string id)
         {
-            _logger.LogInformation("Attempting to retrieve Digital Twin configuration with ID: {TwinId}", id);
-            var twin = _settingsSnapshot.Value.DigitalTwinSettings?.Twins
-                .FirstOrDefault(t => t.Id.Equals(id, System.StringComparison.OrdinalIgnoreCase));
-
-            if (twin == null)
+            _logger.LogInformation("Getting Digital Twin configuration with ID: {TwinId}", id);
+            var config = await _configService.GetByIdAsync(id);
+            if (config == null)
             {
                 _logger.LogWarning("Digital Twin configuration with ID: {TwinId} not found.", id);
-                return NotFound($"Digital Twin configuration with ID '{id}' not found.");
+                return NotFound();
             }
-
-            _logger.LogInformation("Successfully retrieved configuration for Digital Twin ID: {TwinId}", id);
-            return Ok(twin);
+            return Ok(config);
         }
 
-        /// <summary>
-        /// Creates a new Digital Twin integration configuration.
-        /// (Placeholder: This endpoint simulates creation but does not persist changes.)
-        /// </summary>
-        /// <param name="newTwinConfig">The configuration for the new Digital Twin.</param>
-        /// <returns>The created Digital Twin configuration with a 201 Created status.</returns>
         [HttpPost]
-        // [Authorize(Roles = "Administrator")] // Example: Role-based authorization
-        [ProducesResponseType(typeof(DigitalTwinConfig), 201)]
-        [ProducesResponseType(400)]
-        public IActionResult CreateDigitalTwin([FromBody] DigitalTwinConfig newTwinConfig)
+        public async Task<ActionResult<DigitalTwinConfigDto>> CreateTwinConfig([FromBody] DigitalTwinConfigDto config)
         {
-            _logger.LogInformation("Attempting to create a new Digital Twin configuration with ID: {TwinId}", newTwinConfig.Id);
-            if (!ModelState.IsValid)
+             if (!ModelState.IsValid)
             {
-                _logger.LogWarning("Invalid model state for creating Digital Twin configuration ID: {TwinId}.", newTwinConfig.Id);
                 return BadRequest(ModelState);
             }
-
-            // --- Placeholder for actual persistence logic ---
-            // In a real system, call a service here:
-            // await _digitalTwinConfigurationService.CreateTwinAsync(newTwinConfig);
-            _logger.LogWarning("Placeholder: CreateDigitalTwin called for ID: {TwinId}. Configuration is not persisted in this example.", newTwinConfig.Id);
-
-            // Simulate successful creation by returning the object.
-            return CreatedAtAction(nameof(GetDigitalTwinById), new { id = newTwinConfig.Id }, newTwinConfig);
+            _logger.LogInformation("Creating new Digital Twin configuration with ID: {TwinId}", config.Id);
+            var createdConfig = await _configService.CreateAsync(config);
+            return CreatedAtAction(nameof(GetTwinConfigById), new { id = createdConfig.Id }, createdConfig);
         }
 
-        /// <summary>
-        /// Updates an existing Digital Twin integration configuration.
-        /// (Placeholder: This endpoint simulates update but does not persist changes.)
-        /// </summary>
-        /// <param name="id">The ID of the Digital Twin configuration to update.</param>
-        /// <param name="updatedTwinConfig">The updated configuration data.</param>
-        /// <returns>NoContent if successful; BadRequest or NotFound otherwise.</returns>
         [HttpPut("{id}")]
-        // [Authorize(Roles = "Administrator")]
-        [ProducesResponseType(204)]
-        [ProducesResponseType(400)]
-        [ProducesResponseType(404)]
-        public IActionResult UpdateDigitalTwin(string id, [FromBody] DigitalTwinConfig updatedTwinConfig)
+        public async Task<IActionResult> UpdateTwinConfig(string id, [FromBody] DigitalTwinConfigDto config)
         {
-            _logger.LogInformation("Attempting to update Digital Twin configuration with ID: {TwinId}", id);
-            if (id != updatedTwinConfig.Id)
+            if (id != config.Id)
             {
-                _logger.LogWarning("ID mismatch in route ({RouteId}) and body ({BodyId}) for update request.", id, updatedTwinConfig.Id);
-                return BadRequest("ID in path must match ID in request body.");
+                return BadRequest("ID mismatch.");
             }
-
             if (!ModelState.IsValid)
             {
-                _logger.LogWarning("Invalid model state for updating Digital Twin configuration ID: {TwinId}.", id);
                 return BadRequest(ModelState);
             }
-
-            // --- Placeholder for actual persistence logic ---
-            // var success = await _digitalTwinConfigurationService.UpdateTwinAsync(updatedTwinConfig);
-            // if (!success) return NotFound($"Digital Twin configuration with ID '{id}' not found for update.");
-            _logger.LogWarning("Placeholder: UpdateDigitalTwin called for ID: {TwinId}. Configuration is not persisted in this example.", id);
-
-            // Simulate finding and updating
-            var existingTwin = _settingsSnapshot.Value.DigitalTwinSettings?.Twins
-                .FirstOrDefault(t => t.Id.Equals(id, System.StringComparison.OrdinalIgnoreCase));
-            if (existingTwin == null)
+            _logger.LogInformation("Updating Digital Twin configuration with ID: {TwinId}", id);
+            var updatedConfig = await _configService.UpdateAsync(id, config);
+             if (updatedConfig == null)
             {
-                _logger.LogWarning("Digital Twin configuration with ID: {TwinId} not found for update (placeholder check).", id);
-                return NotFound($"Digital Twin configuration with ID '{id}' not found.");
+                _logger.LogWarning("Digital Twin configuration with ID: {TwinId} not found for update.", id);
+                return NotFound();
             }
-            
-            return NoContent(); // HTTP 204 for successful update
+            return NoContent();
         }
 
-        /// <summary>
-        /// Deletes a Digital Twin integration configuration by ID.
-        /// (Placeholder: This endpoint simulates deletion but does not persist changes.)
-        /// </summary>
-        /// <param name="id">The ID of the Digital Twin configuration to delete.</param>
-        /// <returns>NoContent if successful; NotFound otherwise.</returns>
         [HttpDelete("{id}")]
-        // [Authorize(Roles = "Administrator")]
-        [ProducesResponseType(204)]
-        [ProducesResponseType(404)]
-        public IActionResult DeleteDigitalTwin(string id)
+        public async Task<IActionResult> DeleteTwinConfig(string id)
         {
-            _logger.LogInformation("Attempting to delete Digital Twin configuration with ID: {TwinId}", id);
-
-            // --- Placeholder for actual persistence logic ---
-            // var success = await _digitalTwinConfigurationService.DeleteTwinAsync(id);
-            // if (!success) return NotFound($"Digital Twin configuration with ID '{id}' not found for deletion.");
-            _logger.LogWarning("Placeholder: DeleteDigitalTwin called for ID: {TwinId}. Configuration is not persisted in this example.", id);
-            
-            // Simulate finding and deleting
-            var existingTwin = _settingsSnapshot.Value.DigitalTwinSettings?.Twins
-                .FirstOrDefault(t => t.Id.Equals(id, System.StringComparison.OrdinalIgnoreCase));
-            if (existingTwin == null)
+            _logger.LogInformation("Deleting Digital Twin configuration with ID: {TwinId}", id);
+            var success = await _configService.DeleteAsync(id);
+            if (!success)
             {
-                _logger.LogWarning("Digital Twin configuration with ID: {TwinId} not found for deletion (placeholder check).", id);
-                return NotFound($"Digital Twin configuration with ID '{id}' not found.");
+                _logger.LogWarning("Digital Twin configuration with ID: {TwinId} not found for deletion.", id);
+                return NotFound();
             }
-
-            return NoContent(); // HTTP 204 for successful deletion
+            return NoContent();
         }
     }
 }
