@@ -1,124 +1,98 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
+using MediatR; // Assuming MediatR is used for CQRS
 
-// Assuming these namespaces will exist based on the SDS and file structure
-using AIService.Application.Interfaces;
-using AIService.Application.Services;
+// Domain Layer using statements (interfaces)
 using AIService.Domain.Interfaces;
 using AIService.Domain.Services;
+
+// Application Layer using statements (interfaces and implementations)
+using AIService.Application.Interfaces;
+using AIService.Application.Services;
+// --- Add specific command/handler namespaces if MediatR scans by assembly ---
+// e.g., using AIService.Application.Features.PredictiveMaintenance.Commands;
+
+// Infrastructure Layer using statements (implementations)
 using AIService.Infrastructure.AI.Common;
-using AIService.Infrastructure.AI.Execution.ONNX;
-using AIService.Infrastructure.AI.Execution.MLNet;
-using AIService.Infrastructure.AI.Execution.TensorFlow;
-using AIService.Infrastructure.Nlp.SpaCy;
-using AIService.Infrastructure.Nlp.AzureCognitive;
+using AIService.Infrastructure.AI.ONNX;
+using AIService.Infrastructure.AI.TensorFlow;
+using AIService.Infrastructure.AI.MLNet;
+using AIService.Infrastructure.NLP.SpaCy;
+using AIService.Infrastructure.NLP.AzureCognitive;
 using AIService.Infrastructure.MLOps.MLflow;
 using AIService.Infrastructure.Persistence;
 using AIService.Infrastructure.Clients;
-// Api.Mappers would contain AutoMapper profiles
-// Api.Controllers would contain controllers
-// Api.GrpcServices would contain gRPC services
-// Application.*.Commands and Application.*.Handlers for MediatR
+using AIService.Infrastructure.Utils;
+
 
 namespace AIService.Configuration
 {
     public static class DependencyInjection
     {
-        public static IServiceCollection AddAIServices(this IServiceCollection services, IConfiguration configuration)
+        public static IServiceCollection AddApplicationServices(this IServiceCollection services, IConfiguration configuration)
         {
-            // Configure strongly-typed options
-            services.Configure<ModelOptions>(configuration.GetSection("ModelOptions"));
-            services.Configure<NlpProviderOptions>(configuration.GetSection("NlpProviderOptions"));
-            services.Configure<MLOpsOptions>(configuration.GetSection("MLOpsOptions"));
-            // REQ-7-006: Assuming DataServiceClient configuration is handled directly or via another Options class
-            // services.Configure<DataServiceOptions>(configuration.GetSection("DataServiceOptions"));
+            // Add AutoMapper
+            services.AddAutoMapper(Assembly.GetExecutingAssembly()); // Or specify assemblies containing profiles
 
-
-            // Register AutoMapper (scans for profiles in the current assembly)
-            // Ensure AutoMapper profiles are defined in e.g. AIService.Api.Mappers
-            services.AddAutoMapper(Assembly.GetExecutingAssembly());
-
-            // Register MediatR (scans for handlers in the current assembly)
-            // Ensure Commands and Handlers are defined in e.g. AIService.Application.*
+            // Add MediatR
+            // Ensure MediatR is added to the .csproj file: <PackageReference Include="MediatR" Version="12.x.x" />
+            // <PackageReference Include="MediatR.Extensions.Microsoft.DependencyInjection" Version="11.x.x" /> is usually not needed for MediatR 12+
             services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(Assembly.GetExecutingAssembly()));
 
-            // Application Layer Services
-            services.AddScoped<IModelManagementAppService, ModelManagementAppService>(); // REQ-7-004, REQ-7-005, REQ-7-010
-            services.AddScoped<IEdgeDeploymentAppService, EdgeDeploymentAppService>();   // REQ-8-001
 
-            // Domain Layer Services
-            services.AddScoped<ModelExecutionService>(); // REQ-7-003
-            services.AddScoped<NlpOrchestrationService>(); // REQ-7-013, REQ-7-014, REQ-7-015, REQ-7-016
+            // Register Application Services
+            services.AddScoped<IModelManagementAppService, ModelManagementAppService>();
+            services.AddScoped<IEdgeDeploymentAppService, EdgeDeploymentAppService>();
 
-            // Infrastructure Layer - AI Execution Engines
-            // These are registered as IEnumerable<IModelExecutionEngine> so ModelExecutionService can select the appropriate one.
-            services.AddSingleton<IModelExecutionEngine, OnnxExecutionEngine>();         // REQ-7-003
-            services.AddSingleton<IModelExecutionEngine, TensorFlowExecutionEngine>(); // For TensorFlow/TFLite models
-            services.AddSingleton<IModelExecutionEngine, MLNetExecutionEngine>();       // For ML.NET models
+            return services;
+        }
 
-            // Infrastructure Layer - NLP Providers
-            // These are registered as IEnumerable<INlpProvider> so NlpOrchestrationService can select based on config.
-            services.AddScoped<INlpProvider, SpaCyNlpProvider>();               // REQ-7-014
-            services.AddScoped<INlpProvider, AzureCognitiveServicesNlpProvider>(); // REQ-7-014
+        public static IServiceCollection AddInfrastructureServices(this IServiceCollection services, IConfiguration configuration)
+        {
+            // Register Domain Services
+            services.AddScoped<ModelExecutionService>(); // Concrete class, not interface, if it orchestrates multiple IModelExecutionEngine
+            services.AddScoped<NlpOrchestrationService>(); // Concrete class, for orchestrating INlpProvider
 
-            // Infrastructure Layer - MLOps Client
-            // Select one MLOps client, potentially based on configuration.
-            // For now, registering MLflow as an example.
-            services.AddScoped<IMlLopsClient, MlflowClientAdapter>(); // REQ-7-004, REQ-7-010
+            // Register AI Execution Engines (as a collection)
+            services.AddScoped<IModelExecutionEngine, OnnxExecutionEngine>();
+            services.AddScoped<IModelExecutionEngine, TensorFlowExecutionEngine>();
+            services.AddScoped<IModelExecutionEngine, MLNetExecutionEngine>();
 
-            // Infrastructure Layer - Persistence
-            services.AddScoped<IModelRepository, ModelRepository>(); // REQ-7-006, REQ-DLP-024 (interacts with DataServiceClient)
+            // Register NLP Providers (as a collection, NlpOrchestrationService will select one based on config)
+            services.AddScoped<INlpProvider, SpaCyNlpProvider>();
+            services.AddScoped<INlpProvider, AzureCognitiveServicesNlpProvider>();
 
-            // Infrastructure Layer - Clients
-            // Assuming DataServiceClient is a gRPC client.
-            // Its registration might involve AddGrpcClient and specific configuration.
-            services.AddScoped<DataServiceClient>(); // REQ-7-006, REQ-DLP-024 (gRPC client for REPO-DATA-SERVICE)
+            // Register MLOps Client (conditional registration or factory could be used here based on MLOpsOptions.PlatformType)
+            // For simplicity, registering one for now.
+            services.AddScoped<IMlLopsClient, MlflowClientAdapter>();
+            // Example for AzureML (requires its own adapter)
+            // services.AddScoped<IMlLopsClient, AzureMLClientAdapter>();
 
-            // Infrastructure Layer - Utilities
-            services.AddSingleton<ModelFileLoader>(); // REQ-7-006 (uses DataServiceClient to load models)
-            // services.AddSingleton<ImageProcessingUtils>(); // If SharpCV utilities are wrapped in a class
 
-            // Shared Utilities (Logging, Monitoring)
-            // Serilog is configured in Program.cs. OpenTelemetry would be added here or in Program.cs.
-            // E.g., services.AddOpenTelemetryMetrics(...); services.AddOpenTelemetryTracing(...);
+            // Register Repositories and Clients
+            services.AddScoped<IModelRepository, ModelRepository>();
+
+            // Configure and register DataServiceClient (gRPC client for REPO-DATA-SERVICE)
+            // The URL should come from configuration
+            var dataServiceUrl = configuration.GetValue<string>("DataServiceGrpcUrl");
+            if (string.IsNullOrEmpty(dataServiceUrl))
+            {
+                // Fallback or throw exception if not configured, for development purposes
+                dataServiceUrl = "http://localhost:50051"; // Example default, should be in appsettings
+                // Or throw new InvalidOperationException("DataServiceGrpcUrl is not configured.");
+            }
+            services.AddGrpcClient<DataServiceClient>(options => // DataServiceClient is the generated client class
+            {
+                options.Address = new System.Uri(dataServiceUrl);
+            });
+
+
+            // Register Utilities
+            services.AddSingleton<ModelFileLoader>(); // Singleton if it caches, Scoped otherwise
+            services.AddSingleton<ImageProcessingUtils>(); // Utilities are often stateless singletons
 
             return services;
         }
     }
-
-    // Placeholder for types that would be defined in other files/projects.
-    // These are here just to make DependencyInjection.cs compile standalone for this exercise.
-    // In a real project, these would be in their respective locations.
-
-    namespace Application.Interfaces { public interface IModelManagementAppService { } public interface IEdgeDeploymentAppService { } }
-    namespace Application.Services { public class ModelManagementAppService : IModelManagementAppService { } public class EdgeDeploymentAppService : IEdgeDeploymentAppService { } }
-    namespace Domain.Interfaces
-    {
-        public interface IModelRepository { }
-        public interface IModelExecutionEngine { }
-        public interface INlpProvider { }
-        public interface IMlLopsClient { }
-    }
-    namespace Domain.Services
-    {
-        public class ModelExecutionService { public ModelExecutionService(IEnumerable<Domain.Interfaces.IModelExecutionEngine> engines, Domain.Interfaces.IModelRepository repo, Infrastructure.AI.Common.ModelFileLoader loader, ILogger<ModelExecutionService> logger) { } }
-        public class NlpOrchestrationService { public NlpOrchestrationService(IEnumerable<Domain.Interfaces.INlpProvider> providers, IOptions<NlpProviderOptions> options, ILogger<NlpOrchestrationService> logger) { } }
-    }
-    namespace Infrastructure.AI.Common { public class ModelFileLoader { public ModelFileLoader(Clients.DataServiceClient client, IOptions<ModelOptions> options) { } } }
-    namespace Infrastructure.AI.Execution.ONNX { public class OnnxExecutionEngine : Domain.Interfaces.IModelExecutionEngine { } }
-    namespace Infrastructure.AI.Execution.MLNet { public class MLNetExecutionEngine : Domain.Interfaces.IModelExecutionEngine { } }
-    namespace Infrastructure.AI.Execution.TensorFlow { public class TensorFlowExecutionEngine : Domain.Interfaces.IModelExecutionEngine { } }
-    namespace Infrastructure.Nlp.SpaCy { public class SpaCyNlpProvider : Domain.Interfaces.INlpProvider { } }
-    namespace Infrastructure.Nlp.AzureCognitive { public class AzureCognitiveServicesNlpProvider : Domain.Interfaces.INlpProvider { } }
-    namespace Infrastructure.MLOps.MLflow { public class MlflowClientAdapter : Domain.Interfaces.IMlLopsClient { } }
-    namespace Infrastructure.Persistence { public class ModelRepository : Domain.Interfaces.IModelRepository { public ModelRepository(Clients.DataServiceClient client) { } } }
-    namespace Infrastructure.Clients { public class DataServiceClient { } }
-    namespace Api.GrpcServices { public class AiProcessingGrpcService : Grpc.Core.ServerCallContext { protected override Task WriteResponseHeadersAsyncCore(Grpc.Core.Metadata responseHeaders) => Task.CompletedTask; protected override Grpc.Core.ContextPropagationToken CreatePropagationTokenCore(Grpc.Core.ContextPropagationOptions options) => default; protected override Task ProcessRequestCoreAsync() => Task.CompletedTask; protected override string MethodCore => ""; protected override string HostCore => ""; protected override string PeerCore => ""; protected override DateTime DeadlineCore => DateTime.UtcNow; protected override Grpc.Core.Metadata RequestHeadersCore => default; protected override System.Threading.CancellationToken CancellationTokenCore => default; protected override Grpc.Core.Metadata ResponseTrailersCore => default; protected override Grpc.Core.Status StatusCore { get => default; set { } } protected override Grpc.Core.WriteOptions WriteOptionsCore { get => default; set { } } protected override Grpc.Core.AuthContext AuthContextCore => default; } }
-    // Temporary using directives for the placeholder types
-    using Microsoft.Extensions.Logging;
-    using Microsoft.Extensions.Options;
-    using System.Collections.Generic;
-    using System.Threading.Tasks;
-    using System;
 }

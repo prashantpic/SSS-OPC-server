@@ -1,53 +1,48 @@
 using AIService.Configuration;
+using AIService.Api.GrpcServices; // Assuming this will be created for AiProcessingGrpcService
 using Serilog;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.OpenApi.Models;
-using System.IO;
-using AIService.Api.GrpcServices; // Assuming this is where AiProcessingGrpcService will be
 
-public class Program
+namespace AIService
 {
-    public static void Main(string[] args)
+    public class Program
     {
-        Log.Logger = new LoggerConfiguration()
-            .WriteTo.Console()
-            // Configure Serilog from appsettings.json, etc.
-            // For a real application, integrate with REPO-SHARED-UTILS for logging
-            .CreateBootstrapLogger();
-
-        try
+        public static void Main(string[] args)
         {
-            Log.Information("Starting AI-Processing-Service host");
-
             var builder = WebApplication.CreateBuilder(args);
 
-            // Integrate Serilog with ASP.NET Core logging
-            builder.Host.UseSerilog((context, services, configuration) => configuration
-                .ReadFrom.Configuration(context.Configuration)
-                .ReadFrom.Services(services)
+            // Configure Serilog
+            Log.Logger = new LoggerConfiguration()
+                .ReadFrom.Configuration(builder.Configuration)
                 .Enrich.FromLogContext()
-                .WriteTo.Console());
+                .WriteTo.Console()
+                // .WriteTo.File("logs/aiservice-.log", rollingInterval: RollingInterval.Day) // Example file sink
+                .CreateLogger();
+            builder.Host.UseSerilog();
 
             // Add services to the container.
-            builder.Services.AddAIServices(builder.Configuration);
-
             builder.Services.AddControllers();
             builder.Services.AddGrpc();
+            builder.Services.AddGrpcReflection(); // For gRPC service discovery
 
-            // Configure Swagger/OpenAPI
+            // Configure strongly-typed options
+            builder.Services.Configure<ModelOptions>(builder.Configuration.GetSection("ModelOptions"));
+            builder.Services.Configure<NlpProviderOptions>(builder.Configuration.GetSection("NlpProviderOptions"));
+            builder.Services.Configure<MLOpsOptions>(builder.Configuration.GetSection("MLOpsOptions"));
+
+            // Add application and infrastructure services
+            builder.Services.AddApplicationServices(builder.Configuration);
+            builder.Services.AddInfrastructureServices(builder.Configuration);
+
+
+            // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen(c =>
             {
-                c.SwaggerDoc("v1", new OpenApiInfo { Title = "AI-Processing-Service API", Version = "v1" });
-                // REQ-SAP-005: API Documentation. Include XML comments if configured in .csproj
-                // var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
-                // var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
-                // if (File.Exists(xmlPath))
-                // {
-                //    c.IncludeXmlComments(xmlPath);
-                // }
+                c.SwaggerDoc("v1", new OpenApiInfo { Title = "AI Processing Service API", Version = "v1" });
             });
 
             var app = builder.Build();
@@ -56,28 +51,24 @@ public class Program
             if (app.Environment.IsDevelopment())
             {
                 app.UseSwagger();
-                app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "AI-Processing-Service API v1"));
+                app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "AI Processing Service API v1"));
+                app.MapGrpcReflectionService(); // Expose gRPC reflection in development
             }
 
-            // app.UseHttpsRedirection(); // Consider if running behind a reverse proxy handling TLS
+            app.UseHttpsRedirection();
+
+            app.UseSerilogRequestLogging(); // Log HTTP requests
 
             app.UseRouting();
 
-            // app.UseAuthentication(); // To be configured if REPO-SECURITY integration is handled here
+            // Placeholder for Authentication and Authorization middleware
+            // app.UseAuthentication();
             // app.UseAuthorization();
 
-            app.MapControllers(); // REQ-SAP-002: RESTful API endpoints
-            app.MapGrpcService<AiProcessingGrpcService>(); // REQ-SAP-003: gRPC services. Placeholder for actual service.
+            app.MapControllers();
+            app.MapGrpcService<AiProcessingGrpcService>(); // Assuming AiProcessingGrpcService will be in AIService.Api.GrpcServices
 
             app.Run();
-        }
-        catch (System.Exception ex)
-        {
-            Log.Fatal(ex, "AI-Processing-Service host terminated unexpectedly");
-        }
-        finally
-        {
-            Log.CloseAndFlush();
         }
     }
 }
