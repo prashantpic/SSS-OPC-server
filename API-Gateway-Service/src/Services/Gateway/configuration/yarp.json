@@ -1,0 +1,83 @@
+{
+  "ReverseProxy": { // YARP's configuration is typically under a "ReverseProxy" key if loaded via AddReverseProxy().LoadFromConfig()
+    "Routes": {
+      "management-grpc-route": {
+        "ClusterId": "management-grpc-cluster",
+        "Match": {
+          "Path": "/ManagementService.gRPC/{**remainder}", // Example path for a gRPC service
+          "Methods": [ "POST" ], // gRPC is typically POST
+          "Headers": [
+            {
+              "Name": "Content-Type",
+              "Values": [ "application/grpc" ],
+              "Mode": "ExactHeader"
+            }
+          ]
+        },
+        "Transforms": [ // Optional: Modify path, headers etc.
+          { "PathPattern": "/{**remainder}" }
+        ],
+        "Order": 100 // YARP routes have an order
+      },
+      "data-grpc-route": {
+        "ClusterId": "data-grpc-cluster",
+        "Match": {
+          "Path": "/DataService.gRPC/{**remainder}", // Example path
+          "Methods": [ "POST" ],
+          "Headers": [
+            {
+              "Name": "Content-Type",
+              "Values": [ "application/grpc" ],
+              "Mode": "ExactHeader"
+            }
+          ]
+        },
+        "Transforms": [
+          { "PathPattern": "/{**remainder}" }
+        ],
+        "Order": 101
+      }
+    },
+    "Clusters": {
+      "management-grpc-cluster": {
+        "Destinations": {
+          "destination1": {
+            // Address should come from appsettings.json:ServiceEndpoints ideally
+            "Address": "http://management-service:5001" // Assuming gRPC on this port, HTTP scheme for YARP (will use HTTP/2)
+          }
+        },
+        "HttpClient": {
+          "Version": "2", // Use HTTP/2 for gRPC
+          "VersionPolicy": "RequestVersionOrHigher"
+        },
+        "HealthCheck": { // Example passive health check
+          "Passive": {
+            "Enabled": true,
+            "Policy": "TransportFailureRate",
+            "ReactivationPeriod": "00:00:10"
+          }
+        },
+        "LoadBalancingPolicy": "PowerOfTwoChoices"
+      },
+      "data-grpc-cluster": {
+        "Destinations": {
+          "destination1": {
+            "Address": "http://data-service:5002" // Assuming gRPC on this port
+          }
+        },
+        "HttpClient": {
+          "Version": "2",
+          "VersionPolicy": "RequestVersionOrHigher"
+        },
+        "HealthCheck": {
+          "Passive": {
+            "Enabled": true,
+            "Policy": "TransportFailureRate",
+            "ReactivationPeriod": "00:00:10"
+          }
+        },
+        "LoadBalancingPolicy": "RoundRobin"
+      }
+    }
+  }
+}

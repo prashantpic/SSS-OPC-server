@@ -1,0 +1,78 @@
+{
+  "GlobalConfiguration": {
+    "BaseUrl": "http://localhost:7200",
+    "RateLimitOptions": {
+      "DisableRateLimitHeaders": true // Easier for development testing
+    }
+  },
+  "Routes": [
+    // Override Management Service for local development
+    {
+      "UpstreamPathTemplate": "/api/management/{everything}",
+      "UpstreamHttpMethod": [ "Get", "Post", "Put", "Delete" ],
+      "DownstreamPathTemplate": "/api/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 7001 // Example local port for Management Service
+        }
+      ],
+      "AuthenticationOptions": { // Potentially disable auth for specific dev routes
+        // "AuthenticationProviderKey": "Bearer", 
+        // "AllowedScopes": []
+      },
+      "RateLimitOptions": {
+        "EnableRateLimiting": false // Disable rate limiting for this route in dev
+      },
+      "DelegatingHandlers": [
+        "CorrelationIdDelegatingHandler",
+        "UnifiedLoggingDelegatingHandler"
+        // "JwtValidationDelegatingHandler", // Potentially remove for dev if auth is disabled
+        // "RateLimitingDelegatingHandler",
+        // "RequestTransformationDelegatingHandler",
+        // "ResponseTransformationDelegatingHandler"
+      ]
+    },
+    // Override AI Service for local development
+    {
+      "UpstreamPathTemplate": "/api/ai/{everything}",
+      "UpstreamHttpMethod": [ "Post", "Get" ],
+      "DownstreamPathTemplate": "/api/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 7002 // Example local port for AI Service
+        }
+      ]
+      // Other settings can be overridden similarly
+    },
+    // Override Data Service for local development
+    {
+      "UpstreamPathTemplate": "/api/data/{everything}",
+      "UpstreamHttpMethod": [ "Get", "Post" ],
+      "DownstreamPathTemplate": "/api/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 7003 // Example local port for Data Service
+        }
+      ]
+    },
+    // Override Integration Service for local development
+    {
+      "UpstreamPathTemplate": "/api/integration/{everything}",
+      "UpstreamHttpMethod": [ "Post", "Get" ],
+      "DownstreamPathTemplate": "/api/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 7004 // Example local port for Integration Service
+        }
+      ]
+    }
+  ]
+}

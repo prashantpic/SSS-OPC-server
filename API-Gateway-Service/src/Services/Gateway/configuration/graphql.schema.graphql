@@ -1,0 +1,99 @@
+schema {
+  query: RootQuery
+  mutation: RootMutation
+  # subscription: RootSubscription # Uncomment if subscriptions are implemented
+}
+
+type RootQuery {
+  "Retrieves the status of a specific management client"
+  getClientStatus(clientId: ID!): ManagementClientStatus
+  
+  "Lists all management clients (example, might need pagination)"
+  listClients: [ManagementClientStatus!]!
+
+  "Gets an AI prediction based on the provided input data"
+  getAiPrediction(input: AiInput!): AiPredictionResult
+  
+  "Retrieves historical data for a given tag within a time range"
+  getHistoricalData(tagId: String!, startTime: DateTime!, endTime: DateTime!): [DataPoint!]
+
+  "Example: Get a single piece of example data by ID"
+  exampleServiceData(id: ID!): ExampleServiceData
+}
+
+type RootMutation {
+  "Updates the configuration for a specific client"
+  updateClientConfig(clientId: ID!, config: ClientConfigInput!): ManagementClientStatus
+  
+  "Placeholder for another mutation"
+  submitFeedback(feedback: FeedbackInput!): Boolean
+}
+
+# Input Types
+input ClientConfigInput {
+  "Example configuration field"
+  settingA: String
+  settingB: Int
+  isEnabled: Boolean
+}
+
+input AiInput {
+  "Feature 1 for the AI model"
+  feature1: Float!
+  "Feature 2 for the AI model"
+  feature2: String
+  "Timestamp of the input data"
+  timestamp: DateTime!
+}
+
+input FeedbackInput {
+  "User ID submitting feedback"
+  userId: ID
+  "Content of the feedback"
+  message: String!
+  "Rating associated with the feedback"
+  rating: Int
+}
+
+# Output Types
+type ManagementClientStatus {
+  clientId: ID!
+  status: String!
+  lastSeen: DateTime
+  kpis: [KpiData!]
+  version: String
+  ipAddress: String
+}
+
+type KpiData {
+  name: String!
+  value: Float!
+  timestamp: DateTime!
+  unit: String
+}
+
+type AiPredictionResult {
+  predictionId: ID!
+  outcome: String!
+  confidence: Float
+  suggestedActions: [String!]
+  timestamp: DateTime!
+}
+
+type DataPoint {
+  timestamp: DateTime!
+  value: String! # Value can be of various types, string is a generic representation
+  quality: String!
+}
+
+type ExampleServiceData {
+  id: ID!
+  name: String!
+  description: String
+  value: Int
+  isActive: Boolean
+  relatedItems: [String!]
+}
+
+# Custom Scalar Types (if needed, e.g. DateTime)
+scalar DateTime

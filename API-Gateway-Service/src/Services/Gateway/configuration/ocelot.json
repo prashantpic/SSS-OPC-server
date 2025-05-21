@@ -1,0 +1,176 @@
+{
+  "GlobalConfiguration": {
+    "BaseUrl": "http://localhost:7200", // This is more of a placeholder for Ocelot documentation/Swagger, actual binding is Kestrel/IIS
+    "ServiceDiscoveryProvider": { // Example for static service discovery, can be replaced with Consul, Eureka etc.
+      "Type": "Static",
+      "Configuration": []
+    },
+    "RateLimitOptions": {
+      "DisableRateLimitHeaders": false,
+      "QuotaExceededMessage": "API call quota exceeded.",
+      "HttpStatusCode": 429,
+      "ClientIdHeader": "ClientId" // Example header to identify client for rate limiting
+    },
+    "QoSOptions": { // Default QoS options, can be overridden per route
+      "ExceptionsAllowedBeforeBreaking": 3,
+      "DurationOfBreak": 10000, // milliseconds
+      "TimeoutValue": 30000 // milliseconds
+    },
+    "LoadBalancerOptions": {
+      "Type": "LeastConnection", // Default load balancer
+      "Key": null,
+      "Expiry": 0
+    }
+  },
+  "Routes": [
+    // Management Service Routes
+    {
+      "UpstreamPathTemplate": "/api/management/{everything}",
+      "UpstreamHttpMethod": [ "Get", "Post", "Put", "Delete" ],
+      "DownstreamPathTemplate": "/api/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "management-service", // Should resolve to Management Service (e.g. via Docker DNS, K8s service name)
+          "Port": 80 // Or the specific port the service listens on
+        }
+      ],
+      "AuthenticationOptions": {
+        "AuthenticationProviderKey": "Bearer",
+        "AllowedScopes": [ "management.read", "management.write" ]
+      },
+      "RateLimitOptions": {
+        "EnableRateLimiting": true,
+        "Period": "1s",
+        "PeriodTimespan": 1,
+        "Limit": 10 // Example: 10 requests per second
+      },
+      "QoSOptions": {
+        "TimeoutValue": 15000 // Override default timeout
+      },
+      "DelegatingHandlers": [
+        "CorrelationIdDelegatingHandler",
+        "UnifiedLoggingDelegatingHandler",
+        "JwtValidationDelegatingHandler",
+        "RateLimitingDelegatingHandler",
+        "RequestTransformationDelegatingHandler",
+        "ResponseTransformationDelegatingHandler"
+      ],
+      "LoadBalancerOptions": {
+        "Type": "RoundRobin"
+      }
+    },
+    // AI Processing Service Routes
+    {
+      "UpstreamPathTemplate": "/api/ai/{everything}",
+      "UpstreamHttpMethod": [ "Post", "Get" ],
+      "DownstreamPathTemplate": "/api/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "ai-processing-service",
+          "Port": 80
+        }
+      ],
+      "AuthenticationOptions": {
+        "AuthenticationProviderKey": "Bearer",
+        "AllowedScopes": [ "ai.process" ]
+      },
+      "RateLimitOptions": {
+        "EnableRateLimiting": true,
+        "Period": "1m",
+        "PeriodTimespan": 60,
+        "Limit": 100 // Example: 100 requests per minute
+      },
+      "CacheOptions": {
+        "TtlSeconds": 300, // Cache responses for 5 minutes
+        "Region": "ai_cache"
+      },
+      "DelegatingHandlers": [
+        "CorrelationIdDelegatingHandler",
+        "UnifiedLoggingDelegatingHandler",
+        "JwtValidationDelegatingHandler"
+      ]
+    },
+    // Data Service Routes
+    {
+      "UpstreamPathTemplate": "/api/data/{everything}",
+      "UpstreamHttpMethod": [ "Get", "Post" ],
+      "DownstreamPathTemplate": "/api/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "data-service",
+          "Port": 80
+        }
+      ],
+      "AuthenticationOptions": {
+        "AuthenticationProviderKey": "Bearer",
+        "AllowedScopes": [ "data.read", "data.write" ]
+      },
+      "DelegatingHandlers": [
+        "CorrelationIdDelegatingHandler",
+        "UnifiedLoggingDelegatingHandler",
+        "JwtValidationDelegatingHandler"
+      ]
+    },
+    // Integration Service Routes
+    {
+      "UpstreamPathTemplate": "/api/integration/{everything}",
+      "UpstreamHttpMethod": [ "Post", "Get" ],
+      "DownstreamPathTemplate": "/api/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "integration-service",
+          "Port": 80
+        }
+      ],
+      "AuthenticationOptions": {
+        "AuthenticationProviderKey": "Bearer",
+        "AllowedScopes": [ "integration.execute" ]
+      },
+      "DelegatingHandlers": [
+        "CorrelationIdDelegatingHandler",
+        "UnifiedLoggingDelegatingHandler",
+        "JwtValidationDelegatingHandler"
+      ]
+    },
+    // Example Aggregate Route
+    {
+      "UpstreamPathTemplate": "/api/aggregate/dashboard",
+      "UpstreamHttpMethod": [ "Get" ],
+      "AuthenticationOptions": {
+        "AuthenticationProviderKey": "Bearer",
+        "AllowedScopes": [ "dashboard.read" ]
+      },
+      "Aggregates": [
+        {
+          "RouteKey": "managementData",
+          "JsonPath": "$.userProfile" // Placeholder for how to extract data if needed for aggregator
+        },
+        {
+          "RouteKey": "aiInsights",
+          "JsonPath": "$.recentAlerts" // Placeholder
+        }
+      ],
+      "Aggregator": "DownstreamServicesAggregator", // This must match the registered aggregator class name
+      "DelegatingHandlers": [
+        "CorrelationIdDelegatingHandler",
+        "UnifiedLoggingDelegatingHandler",
+        "JwtValidationDelegatingHandler"
+      ]
+    }
+  ],
+  "Aggregates": [
+    {
+      "RouteKeys": [
+        "managementData", // These keys must match a 'Key' property in a Route definition or be implicitly named by Ocelot
+        "aiInsights"
+      ],
+      "Aggregator": "DownstreamServicesAggregator", // Custom aggregator class name
+      "UpstreamPathTemplate": "/api/internal_aggregate/dashboard_data" // Internal path Ocelot uses for this aggregate definition
+    }
+  ],
+  "DynamicRoutes": []
+}

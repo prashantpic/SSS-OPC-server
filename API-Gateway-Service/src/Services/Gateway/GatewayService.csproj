@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RootNamespace>GatewayService</RootNamespace>
+    <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+    <DockerfileContext>..\..\..</DockerfileContext>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.3" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="8.0.3" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
+    
+    <PackageReference Include="Ocelot" Version="20.0.0" />
+    <PackageReference Include="Ocelot.Cache.Distributed" Version="20.0.0" />
+    <PackageReference Include="Ocelot.Provider.Polly" Version="20.0.0" />
+    
+    <PackageReference Include="Yarp.ReverseProxy" Version="2.1.0" /> <!-- YARP version specified in SDS was 2.0.0, using latest stable 2.1.0 -->
+    
+    <PackageReference Include="GraphQL" Version="7.7.0" />
+    <PackageReference Include="GraphQL.AspNetCore" Version="7.7.0" />
+    <PackageReference Include="GraphQL.Server.Ui.Playground" Version="7.6.0" /> <!-- Compatible version for GraphQL.NET 7.x -->
+    
+    <PackageReference Include="Polly" Version="8.3.1" />
+    <PackageReference Include="Polly.Extensions.Http" Version="3.0.0" />
+
+    <!-- Logging: Consider Serilog or similar for structured logging -->
+    <!-- <PackageReference Include="Serilog.AspNetCore" Version="8.0.0" /> -->
+    <!-- <PackageReference Include="Serilog.Sinks.Console" Version="5.0.1" /> -->
+
+    <!-- Tracing: Consider OpenTelemetry for distributed tracing -->
+    <!-- <PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.7.0" /> -->
+    <!-- <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.7.0" /> -->
+    <!-- <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.7.1" /> -->
+    <!-- <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.7.1" /> -->
+  </ItemGroup>
+
+</Project>
