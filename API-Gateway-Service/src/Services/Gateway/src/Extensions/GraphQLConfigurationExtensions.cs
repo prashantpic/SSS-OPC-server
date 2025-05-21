@@ -1,77 +1,58 @@
-using GraphQL;
-using GraphQL.MicrosoftDI;
-using GraphQL.Server; // For AddGraphQL extension
-using GraphQL.SystemTextJson; // For AddSystemTextJson
-using GraphQL.Types;
+using GatewayService.GraphQL.Resolvers;
 using GatewayService.GraphQL.Schemas;
-using GatewayService.GraphQL.Types;
-using GatewayService.GraphQL.Resolvers; // Assuming ExampleServiceResolver might be used/registered
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Configuration; // Added for IConfiguration
-using Microsoft.AspNetCore.Hosting; // For IWebHostEnvironment
-using Microsoft.Extensions.Hosting; // For IHostEnvironment
+using GatewayService.GraphQL.Types; // Assuming your GraphQL types are here
+using GraphQL.Server; // For AddGraphQL extension
+using GraphQL.SystemTextJson; // For System.Text.Json serialization
+using GraphQL; // For IDocumentExecuter and such
 
 namespace GatewayService.Extensions
 {
-    /// <summary>
-    /// Extension methods for configuring GraphQL.NET.
-    /// </summary>
     public static class GraphQLConfigurationExtensions
     {
-        /// <summary>
-        /// Configures GraphQL.NET services for the API Gateway.
-        /// </summary>
-        /// <param name="services">The <see cref="IServiceCollection"/> to add services to.</param>
-        /// <param name="configuration">The application configuration.</param>
-        /// <param name="environment">The hosting environment.</param>
-        /// <returns>The <see cref="IServiceCollection"/> so that additional calls can be chained.</returns>
-        public static IServiceCollection AddGraphQLServices(
-            this IServiceCollection services,
-            IConfiguration configuration,
-            IWebHostEnvironment environment)
+        public static IServiceCollection AddGraphQLServices(this IServiceCollection services)
         {
-            // Register GraphQL core services and System.Text.Json serializer
+            // Add GraphQL services
             services.AddGraphQL(builder => builder
-                .AddSystemTextJson(options =>
-                {
-                    // Configure System.Text.Json options if needed
-                    // options.PropertyNameCaseInsensitive = true;
-                })
-                .AddSchema<AppSchema>() // Registers AppSchema and tells GraphQL to use it
-                .AddGraphTypes(typeof(AppSchema).Assembly) // Scans assembly for graph types
-                .AddDataLoader() // Adds support for DataLoader pattern
-                .AddErrorInfoProvider(opt => // Configure error info
-                {
-                    opt.ExposeExceptionStackTrace = environment.IsDevelopment();
-                    opt.Expose всемرک کاStandard = true; // Exposes standard error fields like 'message', 'locations', 'path'
-                    // opt.ExposeData = true; // Exposes the 'data' field in errors
-                    // opt.ExposeCode = true; // Exposes the 'code' field in errors
-                    // opt.ExposeCodes = true; // Exposes the 'codes' field in errors (plural)
-                })
-                // .AddAuthorization(options => // Configure GraphQL authorization if needed
-                // {
-                //    options.AddPolicy("AuthenticatedUserPolicy", p => p.RequireAuthenticatedUser());
-                // })
-                .AddServer(true) // Adds services required for GraphQL.Server (e.g. for subscriptions)
+                .AddSchema<AppSchema>() // Register your main schema
+                .AddSystemTextJson()    // Use System.Text.Json for serialization (recommended for ASP.NET Core)
+                .AddErrorInfoProvider(opt => opt.ExposeExceptionStackTrace = true) // Configure error details (consider for dev only)
+                .AddGraphTypes(typeof(AppSchema).Assembly) // Discover and register all graph types in the assembly
+                .AddDataLoader() // For data loader support (efficient batching)
+                .AddUserContextBuilder(httpContext => new GraphQLUserContext { User = httpContext.User }) // Example user context
+                // .AddAuthorization(options => /* Configure GraphQL authorization rules here */) // If using GraphQL.NET authorization
             );
 
 
-            // Register schema and root types.
-            // AddGraphQL().AddSchema<AppSchema>() handles this, but explicit registration can also be done.
-            // services.AddSingleton<ISchema, AppSchema>(); // AppSchema will be resolved by AddSchema<AppSchema>()
-            // services.AddTransient<RootQueryType>();
-            // services.AddTransient<ExampleServiceDataType>();
-            // ... other GraphQL types
+            // Register your GraphQL resolvers, types, and schema
+            // Graph types are often discovered by .AddGraphTypes, but resolvers might need explicit registration
+            // depending on how they are structured and injected.
+            services.AddScoped<AppSchema>(); // Or Singleton depending on your schema's lifetime needs
+            services.AddScoped<RootQueryType>();
+            // Add other GraphQL types if they are not automatically discovered or have complex dependencies
+            services.AddScoped<ExampleServiceDataType>();
+            services.AddScoped<ManagementStatusType>();
+            services.AddScoped<AiPredictionType>();
+            services.AddScoped<TimeSeriesDataType>();
 
-            // Register any services/resolvers needed by your GraphQL types/fields
-            // services.AddScoped<ExampleServiceResolver>(); // Example if you use separate resolver classes
 
-            // Example: If GraphQL resolvers need HttpClient to call downstream services
-            // Ensure named HttpClients are configured with Polly policies in PollyPolicyExtensions.cs
-            // services.AddHttpClient("GraphQLDownstreamClient") // Configure this client in PollyPolicyExtensions
-            //    .ConfigureHttpClient(client => { /* any specific http client config */ });
+            // Register resolvers - these contain the logic to fetch data
+            services.AddScoped<ExampleServiceResolver>();
+            services.AddScoped<ManagementServiceResolver>();
+            services.AddScoped<AIServiceResolver>();
+            services.AddScoped<DataServiceResolver>();
+
+
+            // If you are using GraphQL.Server.Ui.Playground or Altair for a UI
+            // services.AddGraphQLPlayground(options => { options.Path = "/ui/playground"; });
+            // services.AddGraphQLAltair(options => { options.Path = "/ui/altair"; });
 
             return services;
         }
+    }
+
+    // Example User Context class
+    public class GraphQLUserContext : Dictionary<string, object>
+    {
+        public System.Security.Claims.ClaimsPrincipal User { get; set; }
     }
 }

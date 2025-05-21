@@ -1,65 +1,50 @@
-using System;
-using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace GatewayService.Models
 {
     /// <summary>
     /// Defines a standardized error response model for the API Gateway.
+    /// This ensures that clients receive error information in a consistent format.
     /// </summary>
     public class ErrorViewModel
     {
         /// <summary>
-        /// A unique identifier for the request, useful for tracing.
+        /// A unique identifier for the request, useful for tracing and correlation.
         /// </summary>
-        public string RequestId { get; set; } = string.Empty;
+        [JsonPropertyName("requestId")]
+        public string? RequestId { get; set; }
 
         /// <summary>
-        /// A human-readable message explaining the error.
+        /// A human-readable message describing the error.
         /// </summary>
-        public string Message { get; set; } = string.Empty;
+        [JsonPropertyName("message")]
+        public string Message { get; set; }
 
         /// <summary>
-        /// Optional application-specific error code.
+        /// Optional field for additional error details, such as validation errors or specific error codes.
+        /// This could be a string, an object, or an array of error details.
         /// </summary>
-        public string? ErrorCode { get; set; }
+        [JsonPropertyName("details")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public object? Details { get; set; }
 
         /// <summary>
-        /// The HTTP status code.
+        /// HTTP Status code associated with this error.
         /// </summary>
+        [JsonIgnore] // Typically part of the HTTP response, not the body, but can be included if needed.
         public int StatusCode { get; set; }
 
-        /// <summary>
-        /// The timestamp when the error occurred.
-        /// </summary>
-        public DateTime Timestamp { get; set; }
 
-        /// <summary>
-        /// The path of the request that resulted in an error.
-        /// </summary>
-        public string? Path { get; set; }
-
-        /// <summary>
-        /// A dictionary of validation errors, where the key is the field name and the value is an array of error messages.
-        /// </summary>
-        public Dictionary<string, string[]>? Errors { get; set; }
-
-        public ErrorViewModel()
+        public ErrorViewModel(string message)
         {
-            Timestamp = DateTime.UtcNow;
-        }
-
-        public ErrorViewModel(int statusCode, string message)
-        : this()
-        {
-            StatusCode = statusCode;
             Message = message;
         }
 
-        public ErrorViewModel(int statusCode, string message, string requestId, string? path = null)
-        : this(statusCode, message)
+        public ErrorViewModel(string requestId, string message, object? details = null)
         {
             RequestId = requestId;
-            Path = path;
+            Message = message;
+            Details = details;
         }
     }
 }
