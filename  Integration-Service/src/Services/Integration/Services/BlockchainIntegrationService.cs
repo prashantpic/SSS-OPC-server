@@ -1,163 +1,168 @@
-using IntegrationService.Interfaces;
-using IntegrationService.Adapters.Blockchain.Models;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using System;
-using System.Threading.Tasks;
-using IntegrationService.Configuration;
-using System.Security.Cryptography;
-using System.Text;
-using System.Linq; // Added for Linq operations
-using System.Text.RegularExpressions; // Added for Regex
-
 namespace IntegrationService.Services
 {
-    /// <summary>
-    /// Orchestrates Blockchain integrations, handling asynchronous data logging.
-    /// </summary>
+    using System.Security.Cryptography;
+    using System.Text;
+    using System.Text.Json;
+    using System.Threading;
+    using System.Threading.Tasks;
+    using IntegrationService.Adapters.Blockchain.Models; // Assuming opcData is a complex object or JSON
+    using IntegrationService.Configuration;
+    using IntegrationService.Interfaces;
+    using Microsoft.Extensions.Logging;
+    using Microsoft.Extensions.Options;
+
     public class BlockchainIntegrationService
     {
         private readonly ILogger<BlockchainIntegrationService> _logger;
-        private readonly IntegrationSettings _settings;
+        private readonly IOptionsMonitor<BlockchainSettings> _blockchainSettings;
         private readonly IBlockchainAdaptor _blockchainAdaptor;
+        private readonly ICredentialManager _credentialManager; // Used by NethereumBlockchainAdaptor
 
         public BlockchainIntegrationService(
             ILogger<BlockchainIntegrationService> logger,
-            IOptions<IntegrationSettings> settings,
-            IBlockchainAdaptor blockchainAdaptor)
+            IOptionsMonitor<BlockchainSettings> blockchainSettings,
+            IBlockchainAdaptor blockchainAdaptor,
+            ICredentialManager credentialManager)
         {
-            _logger = logger;
-            _settings = settings.Value;
-            _blockchainAdaptor = blockchainAdaptor;
-
-             _logger.LogInformation("BlockchainIntegrationService initialized.");
-
-            if (_settings.FeatureFlags.EnableBlockchainLogging)
-            {
-                 _blockchainAdaptor.ConnectAsync()
-                     .ContinueWith(task => {
-                         if(task.IsFaulted) {
-                             _logger.LogError(task.Exception, "Failed to connect Blockchain Adaptor on startup.");
-                         } else {
-                             _logger.LogInformation("Blockchain Adaptor connected successfully on startup.");
-                         }
-                     });
-            } else {
-                 _logger.LogInformation("Blockchain logging is disabled, skipping adaptor connection on startup.");
-            }
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _blockchainSettings = blockchainSettings ?? throw new ArgumentNullException(nameof(blockchainSettings));
+            _blockchainAdaptor = blockchainAdaptor ?? throw new ArgumentNullException(nameof(blockchainAdaptor));
+            _credentialManager = credentialManager; // Injected but primarily used by the adaptor itself
         }
 
-        public Task ProcessDataForBlockchainLoggingAsync(object dataPayload, string sourceId, DateTimeOffset timestamp, object? metadata = null)
+        public async Task LogDataIfCriticalAsync(object data, string sourceId, CancellationToken cancellationToken)
         {
-            if (!_settings.FeatureFlags.EnableBlockchainLogging)
+            var settings = _blockchainSettings.CurrentValue;
+            if (!settings.IsEnabled)
             {
-                 _logger.LogDebug("Blockchain logging is disabled by feature flag. Skipping data processing for source {SourceId}.", sourceId);
-                return Task.CompletedTask;
+                _logger.LogDebug("Blockchain integration is disabled. Skipping data logging.");
+                return;
             }
 
-            if (!_settings.BlockchainSettings.CriticalDataCriteria.Enabled)
+            if (!IsDataCritical(data, settings.CriticalDataCriteria))
             {
-                 _logger.LogDebug("Blockchain critical data logging criteria are disabled. Skipping data processing for source {SourceId}.", sourceId);
-                 return Task.CompletedTask;
+                _logger.LogTrace("Data from source {SourceId} does not meet critical criteria for blockchain logging.", sourceId);
+                return;
             }
 
-            _logger.LogDebug("Evaluating data for blockchain logging. Source: {SourceId}", sourceId);
-
-            bool isCritical = false;
-            var criteria = _settings.BlockchainSettings.CriticalDataCriteria;
-
-            if (criteria.OpcTagMatchPatterns != null && criteria.OpcTagMatchPatterns.Any())
-            {
-                foreach (var pattern in criteria.OpcTagMatchPatterns)
-                {
-                    try
-                    {
-                        if (Regex.IsMatch(sourceId, pattern, RegexOptions.IgnoreCase))
-                        {
-                            isCritical = true;
-                            _logger.LogInformation("Data from source {SourceId} matched critical data criteria pattern '{Pattern}'. Marking as critical.", sourceId, pattern);
-                            break;
-                        }
-                    }
-                    catch (ArgumentException ex)
-                    {
-                        _logger.LogError(ex, "Invalid regex pattern '{Pattern}' in OpcTagMatchPatterns. Skipping this pattern.", pattern);
-                    }
-                }
-            }
-            // Add other criteria checks here (e.g., based on metadata.MinSeverityLevel)
-
-            if (isCritical)
-            {
-                 _logger.LogInformation("Data from source {SourceId} determined as critical. Initiating blockchain logging.", sourceId);
-                string dataHash = CalculateDataHash(dataPayload);
-                string metadataJson = metadata != null ? System.Text.Json.JsonSerializer.Serialize(metadata) : string.Empty;
-
-                var request = new BlockchainTransactionRequest
-                {
-                    DataPayload = dataHash,
-                    SourceId = sourceId,
-                    Timestamp = timestamp,
-                    Metadata = metadataJson
-                };
-
-                _ = LogCriticalDataAsync(request); // Fire and forget
-                return Task.CompletedTask;
-            }
-            else
-            {
-                 _logger.LogDebug("Data from source {SourceId} is not considered critical. Skipping blockchain logging.", sourceId);
-                 return Task.CompletedTask;
-            }
-        }
-
-        private string CalculateDataHash(object dataPayload)
-        {
-            _logger.LogTrace("Calculating hash for data payload.");
-            string jsonPayload = System.Text.Json.JsonSerializer.Serialize(dataPayload);
-            using var sha256 = SHA256.Create();
-            byte[] hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(jsonPayload));
-            return BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
-        }
-
-        private async Task LogCriticalDataAsync(BlockchainTransactionRequest request)
-        {
-            _logger.LogInformation("Attempting to log critical data to blockchain. Source: {SourceId}, Data Hash: {DataHash}", request.SourceId, request.DataPayload);
-
-            if (!_blockchainAdaptor.IsConnected)
-            {
-                 _logger.LogWarning("Blockchain Adaptor is not connected. Attempting to connect before logging.");
-                try
-                {
-                    await _blockchainAdaptor.ConnectAsync();
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to connect Blockchain Adaptor. Cannot log data for source {SourceId}.", request.SourceId);
-                    return;
-                }
-            }
+            _logger.LogInformation("Data from source {SourceId} meets critical criteria. Preparing for blockchain logging.", sourceId);
 
             try
             {
-                string transactionHash = await _blockchainAdaptor.LogCriticalDataAsync(request);
-                _logger.LogInformation("Blockchain logging request successful. Transaction Hash: {TransactionHash} for source {SourceId}.", transactionHash, request.SourceId);
+                string dataJson = JsonSerializer.Serialize(data);
+                string dataHash = ComputeSha256Hash(dataJson);
+                var timestamp = DateTimeOffset.UtcNow;
+
+                var request = new BlockchainTransactionRequest(
+                    DataHash: dataHash,
+                    SourceId: sourceId,
+                    Timestamp: timestamp
+                // SmartContractParameters can be added here if the contract requires more than hash, source, and time
+                );
+
+                // The adaptor is responsible for using ICredentialManager to get the private key
+                // and for handling asynchronous submission to the blockchain.
+                var record = await _blockchainAdaptor.LogCriticalDataAsync(request, cancellationToken);
+
+                if (record != null)
+                {
+                    _logger.LogInformation(
+                        "Successfully submitted data to blockchain. Source: {SourceId}, DataHash: {DataHash}, TxHash: {TransactionHash}, Block: {BlockNumber}",
+                        sourceId, dataHash, record.TransactionHash, record.BlockNumber);
+                }
+                else
+                {
+                    _logger.LogWarning("Blockchain logging initiated for Source: {SourceId}, DataHash: {DataHash}, but transaction receipt/record was not immediately available or processing failed upstream in adaptor.", sourceId, dataHash);
+                }
             }
             catch (Exception ex)
             {
-                 _logger.LogError(ex, "Failed to log critical data to blockchain for source {SourceId}.", request.SourceId);
+                _logger.LogError(ex, "Error logging critical data to blockchain for source {SourceId}.", sourceId);
+                // Potentially re-queue or store for later retry if the error is transient and adaptor doesn't handle it.
             }
         }
 
-        public Task<BlockchainRecord?> QueryBlockchainRecordAsync(string identifier)
+        private bool IsDataCritical(object data, List<CriticalDataCriteriaConfig> criteriaList)
         {
-            if (!_settings.FeatureFlags.EnableBlockchainLogging)
+            if (!criteriaList.Any())
             {
-                 _logger.LogDebug("Blockchain logging is disabled by feature flag. Querying blockchain record is not possible.");
-                 return Task.FromResult<BlockchainRecord?>(null);
+                _logger.LogDebug("No critical data criteria defined. Assuming all data passed for logging is critical.");
+                return true; // If no criteria, assume any data passed to this service is intended to be logged.
             }
-             _logger.LogInformation("Querying blockchain for record with identifier: {Identifier}", identifier);
-            return _blockchainAdaptor.GetRecordAsync(identifier);
+
+            // This is a simplified criteria checker. A more robust solution might involve
+            // a rules engine or more complex expression evaluation.
+            // For this example, we'll assume data is a Dictionary<string, object> or can be serialized to one.
+            // Or use System.Text.Json.Nodes.JsonObject for inspection.
+            JsonDocument? dataDoc = null;
+            try
+            {
+                if (data is JsonElement element)
+                {
+                    dataDoc = JsonDocument.Parse(element.GetRawText());
+                }
+                else
+                {
+                    dataDoc = JsonDocument.Parse(JsonSerializer.Serialize(data));
+                }
+
+                if (dataDoc == null) return false;
+
+
+                foreach (var criteria in criteriaList)
+                {
+                    if (!dataDoc.RootElement.TryGetProperty(criteria.SourceProperty, out JsonElement propertyValue))
+                    {
+                        continue; // Property not found, this criterion doesn't match.
+                    }
+
+                    string? valToCompare = propertyValue.ValueKind switch
+                    {
+                        JsonValueKind.String => propertyValue.GetString(),
+                        JsonValueKind.Number => propertyValue.GetRawText(),
+                        JsonValueKind.True => "true",
+                        JsonValueKind.False => "false",
+                        _ => propertyValue.ToString()
+                    };
+
+
+                    bool match = criteria.Operator.ToLowerInvariant() switch
+                    {
+                        "equals" => string.Equals(valToCompare, criteria.Value, StringComparison.OrdinalIgnoreCase),
+                        "contains" => valToCompare?.Contains(criteria.Value, StringComparison.OrdinalIgnoreCase) ?? false,
+                        // Add more operators as needed (e.g., GreaterThan, LessThan for numeric)
+                        _ => false
+                    };
+
+                    if (match) return true; // If any criterion matches, it's critical.
+                }
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex, "Could not parse data for critical check. Assuming not critical.");
+                return false;
+            }
+            finally
+            {
+                dataDoc?.Dispose();
+            }
+
+
+            return false; // No criteria matched.
+        }
+
+        private static string ComputeSha256Hash(string rawData)
+        {
+            using (SHA256 sha256Hash = SHA256.Create())
+            {
+                byte[] bytes = sha256Hash.ComputeHash(Encoding.UTF8.GetBytes(rawData));
+                StringBuilder builder = new StringBuilder();
+                for (int i = 0; i < bytes.Length; i++)
+                {
+                    builder.Append(bytes[i].ToString("x2"));
+                }
+                return builder.ToString();
+            }
         }
     }
 }

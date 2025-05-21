@@ -1,279 +1,218 @@
-using IntegrationService.Interfaces;
-using IntegrationService.Adapters.DigitalTwin.Models;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using IntegrationService.Configuration;
-using IntegrationService.Adapters.DigitalTwin; // Added for specific adaptor instantiation
-using System.Net.Http; // Added for IHttpClientFactory
-using IntegrationService.Resiliency; // Added for policy factories
-
 namespace IntegrationService.Services
 {
-    /// <summary>
-    /// Orchestrates Digital Twin integrations, managing data synchronization and version compatibility.
-    /// </summary>
+    using System.Collections.Concurrent;
+    using System.Linq;
+    using System.Text.Json;
+    using System.Threading;
+    using System.Threading.Tasks;
+    using IntegrationService.Adapters.DigitalTwin.Models;
+    using IntegrationService.Configuration;
+    using IntegrationService.Interfaces;
+    using Microsoft.Extensions.Logging;
+    using Microsoft.Extensions.Options;
+
     public class DigitalTwinIntegrationService
     {
         private readonly ILogger<DigitalTwinIntegrationService> _logger;
-        private readonly IntegrationSettings _settings;
+        private readonly IOptionsMonitor<DigitalTwinSettings> _digitalTwinSettings;
+        private readonly IEnumerable<IDigitalTwinAdaptor> _platformAdaptors;
         private readonly IDataMapper _dataMapper;
-        private readonly ICredentialManager _credentialManager;
-        private readonly Dictionary<string, IDigitalTwinAdaptor> _adaptors = new Dictionary<string, IDigitalTwinAdaptor>();
-        private readonly IHttpClientFactory _httpClientFactory;
-        private readonly ILoggerFactory _loggerFactory; // To create specific loggers for adaptors
-        private readonly RetryPolicyFactory _retryPolicyFactory;
-        private readonly CircuitBreakerPolicyFactory _circuitBreakerPolicyFactory;
+        private readonly ICredentialManager _credentialManager; // Assuming this is used by adaptors
+        private readonly ConcurrentDictionary<string, IDigitalTwinAdaptor> _activeAdaptors = new();
+        private readonly ConcurrentDictionary<string, DigitalTwinConfig> _platformConfigs = new();
 
+
+        // This service would need a way to get current data for twins.
+        // For this example, SyncDataForTwinAsync will take the data as a parameter.
+        // In a real system, it might fetch from REPO-DATA-SERVICE or an internal cache.
+        // private readonly IDataSourceForDigitalTwins _dataSource;
 
         public DigitalTwinIntegrationService(
             ILogger<DigitalTwinIntegrationService> logger,
-            IOptions<IntegrationSettings> settings,
+            IOptionsMonitor<DigitalTwinSettings> digitalTwinSettings,
+            IEnumerable<IDigitalTwinAdaptor> platformAdaptors,
             IDataMapper dataMapper,
-            ICredentialManager credentialManager,
-            IHttpClientFactory httpClientFactory,
-            ILoggerFactory loggerFactory,
-            RetryPolicyFactory retryPolicyFactory,
-            CircuitBreakerPolicyFactory circuitBreakerPolicyFactory)
+            ICredentialManager credentialManager
+            /* IDataSourceForDigitalTwins dataSource */)
         {
-            _logger = logger;
-            _settings = settings.Value;
-            _dataMapper = dataMapper;
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _digitalTwinSettings = digitalTwinSettings ?? throw new ArgumentNullException(nameof(digitalTwinSettings));
+            _platformAdaptors = platformAdaptors ?? throw new ArgumentNullException(nameof(platformAdaptors));
+            _dataMapper = dataMapper ?? throw new ArgumentNullException(nameof(dataMapper));
             _credentialManager = credentialManager;
-            _httpClientFactory = httpClientFactory;
-            _loggerFactory = loggerFactory;
-            _retryPolicyFactory = retryPolicyFactory;
-            _circuitBreakerPolicyFactory = circuitBreakerPolicyFactory;
+            // _dataSource = dataSource;
 
-             _logger.LogInformation("DigitalTwinIntegrationService initialized.");
-            InitializeAdaptors();
+            _digitalTwinSettings.OnChange(UpdatePlatformConfigurations);
+            UpdatePlatformConfigurations(_digitalTwinSettings.CurrentValue);
         }
 
-        private void InitializeAdaptors()
+        private void UpdatePlatformConfigurations(DigitalTwinSettings settings)
         {
-            _logger.LogInformation("Initializing Digital Twin adaptors...");
-            var dtSettings = _settings.DigitalTwinSettings;
-            var featureFlags = _settings.FeatureFlags;
+            _logger.LogInformation("Updating Digital Twin platform configurations.");
+            var newConfigs = settings.Platforms.Where(p => p.IsEnabled).ToDictionary(p => p.Id);
 
-            foreach (var twinConfig in dtSettings.Twins)
+            foreach (var existingId in _activeAdaptors.Keys.ToList())
             {
-                IDigitalTwinAdaptor? adaptor = null;
-                bool enabled = false;
-
-                switch (twinConfig.Type.ToUpperInvariant())
+                if (!newConfigs.ContainsKey(existingId))
                 {
-                    case "AZUREDIGITALTWINS":
-                    case "HTTP":
-                         if (featureFlags.EnableDigitalTwinSync)
-                        {
-                            adaptor = new HttpDigitalTwinAdaptor(twinConfig,
-                                _loggerFactory.CreateLogger<HttpDigitalTwinAdaptor>(),
-                                _credentialManager, _httpClientFactory, _retryPolicyFactory, _circuitBreakerPolicyFactory);
-                             enabled = true;
-                        } else { _logger.LogInformation("Digital Twin sync is disabled by feature flag for twin '{TwinId}'.", twinConfig.Id); }
-                        break;
-                    default:
-                        _logger.LogWarning("Unsupported Digital Twin platform type configured: {PlatformType} for twin '{TwinId}'. Skipping.", twinConfig.Type, twinConfig.Id);
-                        break;
-                }
-
-                if (adaptor != null && enabled)
-                {
-                     if (_adaptors.ContainsKey(adaptor.Id))
+                    // Disconnect logic for digital twin adaptors if applicable (HTTP might not have persistent connections)
+                    if (_activeAdaptors.TryRemove(existingId, out _))
                     {
-                         _logger.LogWarning("Duplicate Digital Twin configuration ID found: '{TwinId}'. Only the first instance will be used.", adaptor.Id);
-                         (adaptor as IDisposable)?.Dispose();
+                         _logger.LogInformation("Removed adaptor for Digital Twin platform ID: {PlatformId}", existingId);
                     }
-                    else
-                    {
-                        _adaptors.Add(adaptor.Id, adaptor);
-                         _logger.LogInformation("Added Digital Twin adaptor '{Id}' of type {Type}.", adaptor.Id, twinConfig.Type);
-
-                        if (twinConfig.EnableBiDirectional && featureFlags.EnableDigitalTwinSync)
-                        {
-                             _logger.LogInformation("Setting up twin change subscription for bi-directional Digital Twin adaptor '{Id}'.", adaptor.Id);
-                             adaptor.SubscribeToTwinChangesAsync(twinConfig.Id, (change) => HandleIncomingTwinChange(change, adaptor.Id))
-                                 .ContinueWith(task =>
-                                 {
-                                     if (task.IsFaulted)
-                                     {
-                                         _logger.LogError(task.Exception, "Failed to subscribe to twin changes for Digital Twin adaptor '{Id}'.", adaptor.Id);
-                                     }
-                                 });
-                        }
-                    }
+                    _platformConfigs.TryRemove(existingId, out _);
                 }
             }
-             _logger.LogInformation("Digital Twin adaptor initialization finished. {Count} adaptors initialized.", _adaptors.Count);
 
-            var mappingRuleIds = dtSettings.Twins.Select(t => t.DataMappingRuleId).Where(id => !string.IsNullOrEmpty(id)).Distinct();
-             if (mappingRuleIds.Any())
+            foreach (var config in newConfigs.Values)
             {
-                _dataMapper.LoadAllConfiguredRulesAsync(mappingRuleIds).GetAwaiter().GetResult();
+                 _platformConfigs[config.Id] = config;
+                if (!_activeAdaptors.ContainsKey(config.Id))
+                {
+                    InitializeAdaptorAsync(config, CancellationToken.None).ConfigureAwait(false);
+                }
             }
         }
 
-        public async Task SynchronizeTwinDataAsync(string twinId)
+        private async Task InitializeAdaptorAsync(DigitalTwinConfig config, CancellationToken cancellationToken)
         {
-            if (!_settings.FeatureFlags.EnableDigitalTwinSync)
+            // Assuming DigitalTwinConfig.Type specifies the adaptor type (e.g., "HttpV1", "AzureDigitalTwins")
+             var adaptor = _platformAdaptors.FirstOrDefault(a => a.AdaptorType.Equals(config.Type, StringComparison.OrdinalIgnoreCase));
+            if (adaptor == null)
             {
-                 _logger.LogDebug("Digital Twin sync is disabled by feature flag. Skipping sync for twin {TwinId}.", twinId);
-                 return;
+                _logger.LogError("No IDigitalTwinAdaptor found for type: {PlatformType} and ID: {PlatformId}", config.Type, config.Id);
+                return;
             }
-
-            _logger.LogInformation("Starting data synchronization for Digital Twin '{TwinId}'.", twinId);
-
-            if (!_adaptors.TryGetValue(twinId, out var adaptor))
-            {
-                 _logger.LogError("No Digital Twin adaptor found for twin ID '{TwinId}'. Cannot synchronize.", twinId);
-                 return;
-            }
-
-            var twinConfig = _settings.DigitalTwinSettings.Twins.FirstOrDefault(t => t.Id == twinId);
-            if (twinConfig == null)
-            {
-                 _logger.LogError("Configuration not found for Digital Twin '{TwinId}'. Cannot synchronize.", twinId);
-                 return;
-            }
-
-            if (!adaptor.IsConnected)
-            {
-                 _logger.LogWarning("Digital Twin adaptor '{TwinId}' is not connected. Attempting to connect before syncing.", twinId);
-                try
-                {
-                    await adaptor.ConnectAsync();
-                }
-                catch (Exception ex)
-                {
-                     _logger.LogError(ex, "Failed to connect Digital Twin adaptor '{TwinId}'. Cannot synchronize.", twinId);
-                     return;
-                }
-            }
-
             try
             {
-                 _logger.LogDebug("Checking model compatibility for twin '{TwinId}' (Target Model: {TargetModelId}).", twinId, twinConfig.TargetModelId);
-                var modelInfo = await adaptor.GetTwinModelInfoAsync(twinId); // twinId here is the adaptor.Id which is twinConfig.Id
-                if (modelInfo == null || !IsModelCompatible(modelInfo, twinConfig.TargetModelId))
-                {
-                     _logger.LogWarning("Digital Twin model '{ModelId}' (Version: {Version}) for twin '{TwinId}' is not compatible with target '{TargetModelId}'. Skipping sync.",
-                        modelInfo?.ModelId, modelInfo?.Version, twinId, twinConfig.TargetModelId);
-                    return;
-                }
-                 _logger.LogDebug("Digital Twin model '{ModelId}' for twin '{TwinId}' is compatible.", modelInfo.ModelId, twinId);
-
-                 _logger.LogWarning("Placeholder: Retrieving latest data from internal systems for twin '{TwinId}'. Requires REPO-DATA-SERVICE integration.", twinId);
-                var latestInternalData = GetLatestInternalDataForTwin(twinId);
-
-                if (latestInternalData == null)
-                {
-                     _logger.LogWarning("No latest internal data found for twin '{TwinId}'. Skipping sync update.", twinId);
-                     return;
-                }
-
-                DigitalTwinUpdateRequest updateRequest;
-                if (!string.IsNullOrEmpty(twinConfig.DataMappingRuleId))
-                {
-                     if (!_dataMapper.AreRulesLoaded(twinConfig.DataMappingRuleId))
-                    {
-                        _logger.LogWarning("Mapping rules '{MappingRuleId}' for twin '{TwinId}' are not loaded. Attempting to load.", twinConfig.DataMappingRuleId, twinId);
-                        await _dataMapper.LoadMappingRulesAsync(twinConfig.DataMappingRuleId);
-                         if (!_dataMapper.AreRulesLoaded(twinConfig.DataMappingRuleId))
-                         {
-                             _logger.LogError("Failed to load mapping rules '{MappingRuleId}' for twin '{TwinId}'. Cannot map and send data.", twinConfig.DataMappingRuleId, twinId);
-                             return;
-                         }
-                    }
-                     _logger.LogDebug("Mapping internal data using rules '{MappingRuleId}' for twin '{TwinId}'.", twinConfig.DataMappingRuleId, twinId);
-                     updateRequest = _dataMapper.Map<object, DigitalTwinUpdateRequest>(latestInternalData, twinConfig.DataMappingRuleId);
-                }
-                else
-                {
-                     _logger.LogWarning("No mapping rule ID configured for twin '{TwinId}'. Cannot map and send data.", twinId);
-                     return;
-                }
-                 updateRequest = updateRequest with { UpdateType = "PropertyUpdate" }; // Assuming sync is PropertyUpdate
-
-                 await adaptor.UpdateTwinAsync(twinId, updateRequest); // twinId here is the DT's actual ID
-                 _logger.LogInformation("Successfully synchronized data to Digital Twin '{TwinId}'.", twinId);
-
+                // Adaptors might need specific configuration passed to them if not handled by DI IOptions directly.
+                await adaptor.ConnectAsync(cancellationToken); // Connect might just validate endpoint/auth for HTTP.
+                _activeAdaptors[config.Id] = adaptor;
+                 _logger.LogInformation("Successfully initialized Digital Twin platform adaptor for ID: {PlatformId}, Type: {PlatformType}", config.Id, config.Type);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error synchronizing data for Digital Twin '{TwinId}'.", twinId);
+                _logger.LogError(ex, "Failed to initialize Digital Twin platform adaptor for ID: {PlatformId}, Type: {PlatformType}", config.Id, config.Type);
             }
         }
 
-        private void HandleIncomingTwinChange(object twinChangePayload, string sourceAdaptorId)
+
+        public async Task SyncDataForTwinAsync(string platformId, string twinInstanceId, object currentTwinData, CancellationToken cancellationToken)
         {
-             _logger.LogInformation("Received incoming Digital Twin change/command payload from adaptor '{SourceAdaptorId}'.", sourceAdaptorId);
-             _logger.LogWarning("Placeholder: Received incoming Digital Twin change/command from '{SourceAdaptorId}'. Implement logic to process payload and interact with target systems.", sourceAdaptorId);
-        }
-
-        private object? GetLatestInternalDataForTwin(string twinId)
-        {
-             _logger.LogWarning("Placeholder method GetLatestInternalDataForTwin called for twin '{TwinId}'. Requires actual data retrieval logic.", twinId);
-            return new { SimulatedValue1 = 123.45, SimulatedStatus = "Running", LastUpdate = DateTimeOffset.UtcNow };
-        }
-
-        private bool IsModelCompatible(DigitalTwinModelInfo currentModel, string targetModelId)
-        {
-             _logger.LogDebug("Checking compatibility for current model '{CurrentId}' (Version: {CurrentVersion}) vs target '{TargetId}'.",
-                currentModel.ModelId, currentModel.Version, targetModelId);
-
-            if (string.IsNullOrEmpty(targetModelId)) {
-                _logger.LogDebug("No target model ID specified for twin, assuming compatible.");
-                return true; // If no target specified, assume compatible
-            }
-            if (string.IsNullOrEmpty(currentModel.ModelId)) {
-                _logger.LogWarning("Current model ID is empty for twin. Cannot verify compatibility with target '{TargetId}'.", targetModelId);
-                return false; // If current model ID is unknown, cannot confirm
-            }
-
-            if (!currentModel.ModelId.Equals(targetModelId, StringComparison.OrdinalIgnoreCase))
+            if (!_platformConfigs.TryGetValue(platformId, out var platformConfig) || !_activeAdaptors.TryGetValue(platformId, out var adaptor))
             {
-                 _logger.LogWarning("Model ID mismatch: '{CurrentId}' != '{TargetId}'.", currentModel.ModelId, targetModelId);
-                 return false;
+                _logger.LogWarning("Digital Twin Platform with ID '{PlatformId}' not found or not active. Cannot sync data for twin '{TwinInstanceId}'.", platformId, twinInstanceId);
+                return;
             }
-             _logger.LogInformation("Placeholder: Model ID matches. Implement robust version compatibility check if versions are used.");
-            return true;
-        }
 
-        public async Task ConnectAllAdaptorsAsync()
-        {
-             _logger.LogInformation("Attempting to connect all initialized Digital Twin adaptors...");
-            var connectTasks = _adaptors.Values.Select(adaptor => adaptor.ConnectAsync().ContinueWith(task =>
+            _logger.LogInformation("Starting data synchronization for Twin ID: {TwinInstanceId} on Platform: {PlatformId}", twinInstanceId, platformId);
+
+            try
             {
-                if (task.IsFaulted)
+                // 1. Optionally, get Digital Twin Model Info for compatibility checks (REQ-8-011)
+                DigitalTwinModelInfo? modelInfo = null;
+                if (!string.IsNullOrEmpty(platformConfig.DigitalTwinModelId)) // Assuming model ID helps fetch broader model info
                 {
-                     _logger.LogError(task.Exception, "Failed to connect Digital Twin adaptor '{AdaptorId}'.", adaptor.Id);
-                } else {
-                     _logger.LogInformation("Digital Twin adaptor '{AdaptorId}' connection task completed. IsConnected: {IsConnected}", adaptor.Id, adaptor.IsConnected);
+                    // The GetDigitalTwinModelInfoAsync might take a generic model ID or a specific twin instance ID
+                    modelInfo = await adaptor.GetDigitalTwinModelInfoAsync(twinInstanceId, cancellationToken);
+                    if (modelInfo != null)
+                    {
+                        _logger.LogDebug("Digital Twin Model Info for {TwinInstanceId}: ID={ModelId}, Version={Version}",
+                                         twinInstanceId, modelInfo.ModelId, modelInfo.Version);
+                        // TODO: Add compatibility check logic here if modelInfo.Version mismatches expected version
+                        // or if modelInfo.Definition is needed for mapping.
+                    }
                 }
-            })).ToList();
 
-            await Task.WhenAll(connectTasks);
-             _logger.LogInformation("Finished attempting to connect all Digital Twin adaptors.");
+                // 2. Map current data to DigitalTwinUpdateRequest
+                DigitalTwinUpdateRequest? updateRequest = null;
+                string? mappingIdentifier = platformConfig.MappingRuleId ?? platformConfig.MappingRulePath;
+
+                if (!string.IsNullOrEmpty(mappingIdentifier))
+                {
+                    // The data mapper might need context about the modelInfo for accurate mapping
+                    updateRequest = await _dataMapper.MapToExternalFormatAsync<object, DigitalTwinUpdateRequest>(currentTwinData, mappingIdentifier, cancellationToken);
+                }
+                else
+                {
+                    // Basic assumption for direct mapping if data is already in the correct format or can be easily serialized
+                    if (currentTwinData is DigitalTwinUpdateRequest directRequest) updateRequest = directRequest;
+                    else if (currentTwinData is JsonDocument jsonDoc) updateRequest = new DigitalTwinUpdateRequest(twinInstanceId, jsonDoc); // Example
+                    else
+                    {
+                         // Attempt to serialize currentTwinData into a JsonDocument for a generic PATCH.
+                        // This requires currentTwinData to be structured appropriately.
+                        var serializedData = JsonSerializer.SerializeToDocument(currentTwinData);
+                        updateRequest = new DigitalTwinUpdateRequest(twinInstanceId, serializedData);
+                    }
+                }
+
+
+                if (updateRequest == null)
+                {
+                    _logger.LogWarning("Failed to map data to DigitalTwinUpdateRequest for Twin ID: {TwinInstanceId} on Platform: {PlatformId}", twinInstanceId, platformId);
+                    return;
+                }
+                
+                // Ensure the twin ID in the request matches the one we're syncing
+                if (updateRequest.TwinId != twinInstanceId)
+                {
+                    _logger.LogWarning("Mapped DigitalTwinUpdateRequest TwinId ({MappedTwinId}) does not match target TwinInstanceId ({TargetTwinId}). Aborting sync.", updateRequest.TwinId, twinInstanceId);
+                    // Potentially re-create the request with the correct TwinId if the payload is generic.
+                    // For now, we'll assume the mapper or source data provides the correct TwinId in the payload structure.
+                    // If DigitalTwinUpdateRequest is just a payload, then the adaptor's SyncDataAsync might take twinId separately.
+                    // Let's assume DigitalTwinUpdateRequest includes the TwinId it pertains to.
+                }
+
+
+                // 3. Send update to Digital Twin platform via adaptor
+                await adaptor.SyncDataAsync(updateRequest, cancellationToken);
+                _logger.LogInformation("Successfully synchronized data for Twin ID: {TwinInstanceId} on Platform: {PlatformId}", twinInstanceId, platformId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error synchronizing data for Twin ID: {TwinInstanceId} on Platform: {PlatformId}", twinInstanceId, platformId);
+            }
         }
 
-         public async Task DisconnectAllAdaptorsAsync()
+        // Method for OpcDataConsumer or other event-driven triggers
+        public async Task ProcessIncomingDataForDigitalTwinsAsync(object data, string sourceTwinId, CancellationToken cancellationToken)
         {
-             _logger.LogInformation("Attempting to disconnect all initialized Digital Twin adaptors...");
-            var disconnectTasks = _adaptors.Values.Select(adaptor => adaptor.DisconnectAsync().ContinueWith(task =>
+            // This method would determine which configured digital twin platforms
+            // are interested in this data (e.g., based on sourceTwinId or data content)
+            // and then call SyncDataForTwinAsync.
+            // For simplicity, let's assume a direct mapping or that all platforms get it.
+            foreach(var platformId in _activeAdaptors.Keys)
             {
-                if (task.IsFaulted)
+                // The `sourceTwinId` here might be an OPC tag or an asset ID that needs to be
+                // mapped to a `twinInstanceId` on the specific digital twin platform.
+                // This mapping logic could be part of the `DataMappingService` or configuration.
+                // For this example, we'll assume sourceTwinId is directly usable or mapped simply.
+                string targetTwinInstanceIdOnPlatform = ResolveTargetTwinInstanceId(platformId, sourceTwinId);
+                if (!string.IsNullOrEmpty(targetTwinInstanceIdOnPlatform))
                 {
-                     _logger.LogError(task.Exception, "Failed to disconnect Digital Twin adaptor '{AdaptorId}'.", adaptor.Id);
-                } else {
-                     _logger.LogInformation("Digital Twin adaptor '{AdaptorId}' disconnection task completed.", adaptor.Id);
+                    await SyncDataForTwinAsync(platformId, targetTwinInstanceIdOnPlatform, data, cancellationToken);
                 }
-            })).ToList();
+            }
+        }
 
-            await Task.WhenAll(disconnectTasks);
-             _logger.LogInformation("Finished attempting to disconnect all Digital Twin adaptors.");
+        private string ResolveTargetTwinInstanceId(string platformId, string sourceTwinId)
+        {
+            // Placeholder for logic to map a source ID (e.g., from OPC) to a specific twin instance ID
+            // on the target digital twin platform. This could involve looking up a configuration
+            // or applying a naming convention.
+            // Example: return $"{platformId}_{sourceTwinId}";
+            return sourceTwinId; // Simplistic assumption: sourceTwinId is the twinInstanceId
+        }
+
+        // Handle incoming commands/setpoints from Digital Twins
+        public async Task HandleIncomingTwinUpdateAsync(string platformId, string twinInstanceId, object updateData, CancellationToken cancellationToken)
+        {
+             _logger.LogInformation("Received update from Digital Twin Platform {PlatformId} for Twin {TwinInstanceId}.", platformId, twinInstanceId);
+            // 1. Validate incoming data
+            // 2. Map to internal format using _dataMapper if needed
+            // 3. Dispatch command/setpoint (e.g., publish to message queue for REPO-OPC-CORE)
+            _logger.LogInformation("Dispatch logic for update from Twin {TwinInstanceId} to be implemented.", twinInstanceId);
         }
     }
 }

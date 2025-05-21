@@ -1,238 +1,198 @@
-using IntegrationService.Interfaces;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using System.Collections.Concurrent;
-using System.IO;
-using System.Threading.Tasks;
-using System.Text.Json; // Added for JSON deserialization
-using System.Collections.Generic; // Added for IEnumerable
-using System.Linq; // Added for Linq operations
-
 namespace IntegrationService.Services
 {
-    /// <summary>
-    /// Implements IDataMapper, loads and applies data transformation rules.
-    /// </summary>
+    using System.Collections.Concurrent;
+    using System.IO;
+    using System.Text.Json;
+    using System.Threading;
+    using System.Threading.Tasks;
+    using IntegrationService.Interfaces;
+    using Microsoft.Extensions.Hosting;
+    using Microsoft.Extensions.Logging;
+
+    // A simple representation of a mapping rule.
+    // In a real system, this would be more complex, potentially using JSONPath, JQ, or a custom DSL.
+    public class MappingRule
+    {
+        public string RuleId { get; set; } = string.Empty;
+        public Dictionary<string, string> FieldMappings { get; set; } = new Dictionary<string, string>(); // SourceField -> TargetField
+        public List<TransformationStep> Transformations { get; set; } = new List<TransformationStep>();
+    }
+
+    public class TransformationStep
+    {
+        public string TargetField { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty; // e.g., "Concat", "ToUpperCase", "DateTimeFormat"
+        public List<string> SourceFields { get; set; } = new List<string>();
+        public Dictionary<string, string> Parameters { get; set; } = new Dictionary<string, string>();
+    }
+
     public class DataMappingService : IDataMapper
     {
         private readonly ILogger<DataMappingService> _logger;
-        private readonly string _mappingRulePathBase;
-        private readonly ConcurrentDictionary<string, JsonDocument> _mappingRulesCache = new ConcurrentDictionary<string, JsonDocument>();
+        private readonly IHostEnvironment _environment;
+        private readonly ConcurrentDictionary<string, MappingRule> _cachedRules = new ConcurrentDictionary<string, MappingRule>();
+        private readonly string _mappingsDirectory;
 
-        public DataMappingService(ILogger<DataMappingService> logger, IConfiguration configuration)
+        public DataMappingService(ILogger<DataMappingService> logger, IHostEnvironment environment)
         {
-            _logger = logger;
-            _mappingRulePathBase = configuration["IntegrationSettings:MappingRulePathBase"] ?? "Mappings";
-             _logger.LogInformation("DataMappingService initialized with base path {BasePath}", _mappingRulePathBase);
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _environment = environment ?? throw new ArgumentNullException(nameof(environment));
+            _mappingsDirectory = Path.Combine(_environment.ContentRootPath, "Mappings"); // e.g., "Mappings/IoT/", "Mappings/DigitalTwin/"
         }
 
-        public TTarget Map<TSource, TTarget>(TSource sourceData, string mappingRuleId) where TTarget : new()
+        private async Task<MappingRule?> LoadRuleAsync(string mappingRuleIdOrPath, CancellationToken cancellationToken)
         {
-            if (!_mappingRulesCache.TryGetValue(mappingRuleId, out var rulesDoc) || rulesDoc == null)
+            if (_cachedRules.TryGetValue(mappingRuleIdOrPath, out var cachedRule))
             {
-                 _logger.LogWarning("Mapping rules for '{MappingRuleId}' not loaded. Attempting to load.", mappingRuleId);
-                 LoadMappingRulesAsync(mappingRuleId).GetAwaiter().GetResult();
-                 if (!_mappingRulesCache.TryGetValue(mappingRuleId, out rulesDoc) || rulesDoc == null)
-                 {
-                     _logger.LogError("Failed to load mapping rules for '{MappingRuleId}'. Cannot perform mapping.", mappingRuleId);
-                     throw new System.InvalidOperationException($"Mapping rules for '{mappingRuleId}' are not loaded.");
-                 }
+                _logger.LogDebug("Using cached mapping rule for ID/Path: {MappingRuleId}", mappingRuleIdOrPath);
+                return cachedRule;
             }
 
-            _logger.LogDebug("Applying mapping rules '{MappingRuleId}' for data of type {SourceType} to {TargetType}", mappingRuleId, typeof(TSource).Name, typeof(TTarget).Name);
-            var targetData = new TTarget();
+            string filePath = mappingRuleIdOrPath;
+            if (!Path.IsPathRooted(filePath))
+            {
+                filePath = Path.Combine(_mappingsDirectory, mappingRuleIdOrPath); // Assuming ruleId can be a relative path
+            }
 
-            // --- Placeholder Mapping Logic using JSON rules ---
-            // This assumes rulesDoc.RootElement contains an array of mapping definitions.
-            // Example rule: { "SourceField": "path.to.source", "TargetField": "path.to.target", "Type": "string" }
+            if (!File.Exists(filePath))
+            {
+                // Try with .json extension if not provided
+                if (!filePath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                {
+                    filePath += ".json";
+                }
+
+                if (!File.Exists(filePath))
+                {
+                    _logger.LogWarning("Mapping rule file not found: {FilePath}", filePath);
+                    return null;
+                }
+            }
+
             try
             {
-                JsonElement mappingInstructions = rulesDoc.RootElement.GetProperty("Rules"); // Assuming rules are under a "Rules" property
+                _logger.LogInformation("Loading mapping rule from: {FilePath}", filePath);
+                var ruleJson = await File.ReadAllTextAsync(filePath, cancellationToken);
+                var rule = JsonSerializer.Deserialize<MappingRule>(ruleJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
-                if (mappingInstructions.ValueKind == JsonValueKind.Array)
+                if (rule != null)
                 {
-                    foreach (JsonElement rule in mappingInstructions.EnumerateArray())
-                    {
-                        string? sourceFieldPath = rule.TryGetProperty("SourceField", out var sfp) ? sfp.GetString() : null;
-                        string? targetFieldPath = rule.TryGetProperty("TargetField", out var tfp) ? tfp.GetString() : null;
-                        // string fieldType = rule.TryGetProperty("Type", out var typeProp) ? typeProp.GetString() : "object"; // Future use
-
-                        if (sourceFieldPath != null && targetFieldPath != null)
-                        {
-                            try
-                            {
-                                object? sourceValue = GetValueFromPath(sourceData, sourceFieldPath);
-                                if (sourceValue != null)
-                                {
-                                    SetValueToPath(targetData, targetFieldPath, sourceValue);
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.LogWarning(ex, "Error applying individual mapping rule: Source '{SourcePath}' to Target '{TargetPath}' for rule ID '{RuleId}'. Skipping this field.", sourceFieldPath, targetFieldPath, mappingRuleId);
-                            }
-                        }
-                    }
+                    _cachedRules.TryAdd(mappingRuleIdOrPath, rule);
+                    return rule;
                 }
-                else
-                {
-                    _logger.LogWarning("Mapping rules for '{MappingRuleId}' are not in the expected array format under 'Rules' property.", mappingRuleId);
-                }
+                _logger.LogWarning("Failed to deserialize mapping rule from: {FilePath}", filePath);
+                return null;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error processing mapping rules for '{MappingRuleId}'.", mappingRuleId);
-                // Potentially return partially mapped object or throw, depending on requirements
-            }
-
-            return targetData;
-        }
-
-        // Helper to get value from potentially nested path
-        private object? GetValueFromPath(object? obj, string path)
-        {
-            if (obj == null || string.IsNullOrEmpty(path)) return null;
-            var properties = path.Split('.');
-            object? current = obj;
-            foreach (var propName in properties)
-            {
-                if (current == null) return null;
-                var propInfo = current.GetType().GetProperty(propName, System.Reflection.BindingFlags.IgnoreCase | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                if (propInfo == null)
-                {
-                    // Try dictionary access if it's a JObject or Dictionary
-                    if (current is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.Object)
-                    {
-                        if (jsonElement.TryGetProperty(propName, out var subElement))
-                        {
-                            current = ExtractJsonElementValue(subElement);
-                            continue;
-                        }
-                    }
-                    if (current is IDictionary<string, object> dict)
-                    {
-                        if (dict.TryGetValue(propName, out var val))
-                        {
-                            current = val;
-                            continue;
-                        }
-                    }
-                    _logger.LogTrace("Property '{Property}' not found on path '{Path}' for object of type '{ObjectType}'.", propName, path, current.GetType().Name);
-                    return null;
-                }
-                current = propInfo.GetValue(current);
-            }
-            return current;
-        }
-
-        private object? ExtractJsonElementValue(JsonElement element)
-        {
-            return element.ValueKind switch
-            {
-                JsonValueKind.String => element.GetString(),
-                JsonValueKind.Number => element.TryGetInt64(out long lVal) ? lVal : element.GetDouble(),
-                JsonValueKind.True => true,
-                JsonValueKind.False => false,
-                JsonValueKind.Null => null,
-                _ => element.Clone() // Return JsonElement for further processing if complex type
-            };
-        }
-
-        // Helper to set value to potentially nested path
-        private void SetValueToPath(object obj, string path, object? value)
-        {
-            var properties = path.Split('.');
-            object current = obj;
-            for (int i = 0; i < properties.Length - 1; i++)
-            {
-                var propInfo = current.GetType().GetProperty(properties[i], System.Reflection.BindingFlags.IgnoreCase | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                if (propInfo == null)
-                {
-                    _logger.LogWarning("Intermediate property '{Property}' not found on path '{Path}'. Cannot set value.", properties[i], path);
-                    return;
-                }
-                object? nextObj = propInfo.GetValue(current);
-                if (nextObj == null)
-                {
-                    if (!propInfo.CanWrite) {
-                        _logger.LogWarning("Intermediate property '{Property}' on path '{Path}' is null and not writable. Cannot set value.", properties[i], path);
-                        return;
-                    }
-                    // If property type has parameterless constructor, try to instantiate
-                    if (propInfo.PropertyType.GetConstructor(Type.EmptyTypes) != null) {
-                        nextObj = Activator.CreateInstance(propInfo.PropertyType);
-                        propInfo.SetValue(current, nextObj);
-                    } else {
-                         _logger.LogWarning("Intermediate property '{Property}' on path '{Path}' is null and cannot be auto-instantiated. Cannot set value.", properties[i], path);
-                        return;
-                    }
-                }
-                current = nextObj!;
-            }
-            var finalPropInfo = current.GetType().GetProperty(properties.Last(), System.Reflection.BindingFlags.IgnoreCase | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-            if (finalPropInfo != null && finalPropInfo.CanWrite)
-            {
-                try
-                {
-                    // Attempt type conversion if necessary
-                    object? convertedValue = Convert.ChangeType(value, finalPropInfo.PropertyType);
-                    finalPropInfo.SetValue(current, convertedValue);
-                }
-                catch (Exception ex)
-                {
-                     _logger.LogWarning(ex, "Failed to convert or set value for property '{Property}' on path '{Path}'. Value: {Value}", properties.Last(), path, value);
-                }
-            }
-            else
-            {
-                _logger.LogWarning("Final property '{Property}' not found or not writable on path '{Path}'.", properties.Last(), path);
+                _logger.LogError(ex, "Error loading mapping rule from: {FilePath}", filePath);
+                return null;
             }
         }
 
-
-        public async Task LoadMappingRulesAsync(string mappingRuleId)
+        public async Task<TExternal?> MapToExternalFormatAsync<TInternal, TExternal>(
+            TInternal internalData,
+            string mappingRuleId,
+            CancellationToken cancellationToken)
         {
-            _logger.LogInformation("Loading mapping rules for '{MappingRuleId}'...", mappingRuleId);
+            var rule = await LoadRuleAsync(mappingRuleId, cancellationToken);
+            if (rule == null || internalData == null)
+            {
+                _logger.LogWarning("Cannot map to external format. Rule '{MappingRuleId}' not loaded or internal data is null.", mappingRuleId);
+                if (typeof(TExternal) == typeof(TInternal)) return (TExternal)(object)internalData; // Passthrough if same type and no rule
+                return default;
+            }
+
+            _logger.LogDebug("Mapping internal data to external format using rule: {RuleId}", rule.RuleId);
+
+            // Simplified mapping logic:
+            // This example assumes TInternal and TExternal are dictionaries or can be treated as such via serialization.
+            // A real implementation would be much more sophisticated.
             try
             {
-                var filePath = Path.Combine(AppContext.BaseDirectory, _mappingRulePathBase, "IoT", $"{mappingRuleId}.json");
-                if (File.Exists(filePath))
+                var sourceJson = JsonSerializer.SerializeToElement(internalData);
+                var targetData = new Dictionary<string, object?>();
+
+                foreach (var mapping in rule.FieldMappings)
                 {
-                    string jsonContent = await File.ReadAllTextAsync(filePath);
-                    JsonDocument doc = JsonDocument.Parse(jsonContent);
-                    _mappingRulesCache[mappingRuleId] = doc;
-                    _logger.LogInformation("Successfully loaded and parsed mapping rules for '{MappingRuleId}' from {FilePath}", mappingRuleId, filePath);
+                    if (sourceJson.TryGetProperty(mapping.Key, out var sourceProp))
+                    {
+                        targetData[mapping.Value] = sourceProp.Clone(); // Clone to avoid issues with JsonElement lifetime
+                    }
                 }
-                else
+                
+                // Apply transformations (very basic placeholder)
+                foreach (var transform in rule.Transformations)
                 {
-                    _logger.LogError("Mapping rule file not found for '{MappingRuleId}' at {FilePath}", mappingRuleId, filePath);
-                    _mappingRulesCache.TryRemove(mappingRuleId, out _);
+                    if (transform.Type == "ToUpperCase" && transform.SourceFields.Count == 1 && targetData.ContainsKey(transform.SourceFields[0]))
+                    {
+                        var val = targetData[transform.SourceFields[0]]?.ToString();
+                        targetData[transform.TargetField] = val?.ToUpperInvariant();
+                    }
+                    // Add more transformation logic here
                 }
+
+                var mappedJson = JsonSerializer.Serialize(targetData);
+                return JsonSerializer.Deserialize<TExternal>(mappedJson);
             }
-            catch (System.Exception ex)
+            catch (JsonException jsonEx)
             {
-                _logger.LogError(ex, "Error loading mapping rules for '{MappingRuleId}'", mappingRuleId);
-                _mappingRulesCache.TryRemove(mappingRuleId, out _); // Ensure corrupt/unloaded rules are removed
-                throw;
+                _logger.LogError(jsonEx, "JSON serialization/deserialization error during mapping for rule '{RuleId}'.", mappingRuleId);
+                return default;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Generic error during mapping for rule '{RuleId}'.", mappingRuleId);
+                return default;
             }
         }
 
-        public bool AreRulesLoaded(string mappingRuleId)
-        {
-            return _mappingRulesCache.ContainsKey(mappingRuleId);
-        }
 
-        public async Task LoadAllConfiguredRulesAsync(IEnumerable<string> mappingRuleIds)
+        public async Task<TInternal?> MapToInternalFormatAsync<TExternal, TInternal>(
+            TExternal externalData,
+            string mappingRuleId,
+            CancellationToken cancellationToken)
         {
-             _logger.LogInformation("Loading all configured mapping rules...");
-            foreach (var ruleId in mappingRuleIds.Distinct())
+            var rule = await LoadRuleAsync(mappingRuleId, cancellationToken);
+            if (rule == null || externalData == null)
             {
-                if (!string.IsNullOrEmpty(ruleId))
-                {
-                   await LoadMappingRulesAsync(ruleId);
-                }
+                 _logger.LogWarning("Cannot map to internal format. Rule '{MappingRuleId}' not loaded or external data is null.", mappingRuleId);
+                if (typeof(TInternal) == typeof(TExternal)) return (TInternal)(object)externalData; // Passthrough
+                return default;
             }
-             _logger.LogInformation("Finished loading configured mapping rules.");
+
+            _logger.LogDebug("Mapping external data to internal format using rule: {RuleId}", rule.RuleId);
+            // Simplified inverse mapping logic (assuming FieldMappings can be inverted)
+             try
+            {
+                var sourceJson = JsonSerializer.SerializeToElement(externalData);
+                var targetData = new Dictionary<string, object?>();
+
+                // Inverse field mapping
+                foreach (var mapping in rule.FieldMappings) // Key is source (internal), Value is target (external)
+                {
+                    // So, for internal format, mapping.Value is the source (external field), mapping.Key is target (internal field)
+                    if (sourceJson.TryGetProperty(mapping.Value, out var sourceProp))
+                    {
+                        targetData[mapping.Key] = sourceProp.Clone();
+                    }
+                }
+                
+                // Inverse transformations would be more complex and are not shown here.
+
+                var mappedJson = JsonSerializer.Serialize(targetData);
+                return JsonSerializer.Deserialize<TInternal>(mappedJson);
+            }
+            catch (JsonException jsonEx)
+            {
+                _logger.LogError(jsonEx, "JSON serialization/deserialization error during inverse mapping for rule '{RuleId}'.", mappingRuleId);
+                return default;
+            }
+            catch (Exception ex)
+            {
+                 _logger.LogError(ex, "Generic error during inverse mapping for rule '{RuleId}'.", mappingRuleId);
+                return default;
+            }
         }
     }
 }

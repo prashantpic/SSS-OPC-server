@@ -1,131 +1,125 @@
-using IntegrationService.Interfaces;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using System; // Added for ArgumentNullException
-using System.Collections.Generic;
-using System.Security.Cryptography.X509Certificates;
-using System.Threading.Tasks;
-
 namespace IntegrationService.Services
 {
-    /// <summary>
-    /// Implements ICredentialManager, retrieving credentials from a secure store.
-    /// </summary>
+    using System;
+    using System.Collections.Concurrent;
+    using System.Threading;
+    using System.Threading.Tasks;
+    using IntegrationService.Interfaces;
+    using Microsoft.Extensions.Configuration;
+    using Microsoft.Extensions.Logging;
+    // using Azure.Identity; // Example for Azure Key Vault
+    // using Azure.Security.KeyVault.Secrets; // Example for Azure Key Vault
+
     public class SecureCredentialService : ICredentialManager
     {
         private readonly ILogger<SecureCredentialService> _logger;
         private readonly IConfiguration _configuration;
-        private readonly string _credentialManagerType;
-        private readonly string _vaultUri;
-        // private readonly string _defaultTenantId; // Not directly used in this version of GetCredentialAsync
+        private readonly ConcurrentDictionary<string, (string Credential, DateTime Expiry)> _cache =
+            new ConcurrentDictionary<string, (string Credential, DateTime Expiry)>();
+        private readonly TimeSpan _cacheDuration = TimeSpan.FromMinutes(30); // Default cache duration
+
+        // Example: For Azure Key Vault
+        // private readonly SecretClient _secretClient;
 
         public SecureCredentialService(ILogger<SecureCredentialService> logger, IConfiguration configuration)
         {
-            _logger = logger;
-            _configuration = configuration;
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
 
-            _credentialManagerType = _configuration["SecurityConfigs:CredentialManagerType"] ?? "Configuration";
-            _vaultUri = _configuration["SecurityConfigs:VaultUri"] ?? string.Empty;
-            // _defaultTenantId = _configuration["SecurityConfigs:DefaultTenantIdForCloudServices"] ?? string.Empty;
+            // Example: Initialize Azure Key Vault client
+            // var keyVaultUri = _configuration["KeyVault:Uri"];
+            // if (!string.IsNullOrEmpty(keyVaultUri))
+            // {
+            //     _secretClient = new SecretClient(new Uri(keyVaultUri), new DefaultAzureCredential());
+            //     _logger.LogInformation("SecureCredentialService initialized with Azure Key Vault: {KeyVaultUri}", keyVaultUri);
+            // }
+            // else
+            // {
+            //     _logger.LogWarning("Azure Key Vault URI not configured. SecureCredentialService will rely on environment variables or direct configuration.");
+            // }
 
-             _logger.LogInformation("SecureCredentialService initialized with type {ManagerType}", _credentialManagerType);
+            var configuredCacheMinutes = _configuration.GetValue<int?>("Security:CredentialCacheDurationMinutes");
+            if (configuredCacheMinutes.HasValue && configuredCacheMinutes.Value > 0)
+            {
+                _cacheDuration = TimeSpan.FromMinutes(configuredCacheMinutes.Value);
+            }
         }
 
-        public Task<string> GetCredentialAsync(string credentialKey)
+        public async Task<string?> GetCredentialAsync(string identifier, CancellationToken cancellationToken)
         {
-            if (string.IsNullOrEmpty(credentialKey))
+            if (string.IsNullOrWhiteSpace(identifier))
             {
-                _logger.LogError("Attempted to retrieve credential with empty key.");
-                throw new ArgumentNullException(nameof(credentialKey));
+                _logger.LogWarning("Credential identifier is null or empty.");
+                return null;
             }
 
-            _logger.LogDebug("Attempting to retrieve credential for key: {CredentialKey} using type {ManagerType}", credentialKey, _credentialManagerType);
+            if (_cache.TryGetValue(identifier, out var cachedEntry) && cachedEntry.Expiry > DateTime.UtcNow)
+            {
+                _logger.LogDebug("Returning cached credential for identifier: {Identifier}", identifier);
+                return cachedEntry.Credential;
+            }
 
-            return _credentialManagerType switch
-            {
-                "Configuration" => Task.FromResult(_configuration[credentialKey] ?? throw new KeyNotFoundException($"Credential '{credentialKey}' not found in configuration.")),
-                "EnvironmentVariables" => Task.FromResult(System.Environment.GetEnvironmentVariable(credentialKey) ?? throw new KeyNotFoundException($"Credential '{credentialKey}' not found in environment variables.")),
-                "SecureVault" => GetCredentialFromVaultAsync(credentialKey),
-                _ => throw new System.NotSupportedException($"Credential manager type '{_credentialManagerType}' is not supported.")
-            };
-        }
+            string? credential = null;
 
-        private Task<string> GetCredentialFromVaultAsync(string credentialKey)
-        {
-            _logger.LogWarning("Placeholder: Retrieving credential '{CredentialKey}' from secure vault URI '{VaultUri}'. Actual vault integration needed.", credentialKey, _vaultUri);
-            // Example integration with Azure Key Vault (requires Azure.Security.KeyVault.Secrets & Azure.Identity)
-            /*
-            if (string.IsNullOrEmpty(_vaultUri))
-            {
-                _logger.LogError("Vault URI is not configured. Cannot retrieve '{CredentialKey}' from SecureVault.", credentialKey);
-                throw new InvalidOperationException("Vault URI is not configured for SecureVault credential manager.");
-            }
-            try
-            {
-                 // Ensure you have proper authentication setup for DefaultAzureCredential
-                 // (e.g., Managed Identity, Service Principal via environment vars, VS login)
-                 var client = new Azure.Security.KeyVault.Secrets.SecretClient(new Uri(_vaultUri), new Azure.Identity.DefaultAzureCredential());
-                 Azure.Response<Azure.Security.KeyVault.Secrets.KeyVaultSecret> secret = await client.GetSecretAsync(credentialKey);
-                 _logger.LogDebug("Successfully retrieved credential '{CredentialKey}' from vault.", credentialKey);
-                 return secret.Value.Value;
-            }
-            catch (Azure.RequestFailedException ex) when (ex.Status == 404)
-            {
-                 _logger.LogError("Credential '{CredentialKey}' not found in vault '{VaultUri}'.", credentialKey, _vaultUri);
-                 throw new KeyNotFoundException($"Credential '{credentialKey}' not found in vault.", ex);
-            }
-            catch (Exception ex)
-            {
-                 _logger.LogError(ex, "Failed to retrieve credential '{CredentialKey}' from vault '{VaultUri}'.", credentialKey, _vaultUri);
-                 throw new KeyNotFoundException($"Failed to retrieve credential '{credentialKey}' from vault.", ex);
-            }
-            */
-            // For placeholder, simulate not found
-            throw new KeyNotFoundException($"Placeholder: Credential '{credentialKey}' not found in simulated vault '{_vaultUri}'.");
-        }
+            // Priority:
+            // 1. Dedicated secure store (e.g., Azure Key Vault, HashiCorp Vault) - Placeholder for now
+            // 2. Environment Variables
+            // 3. Direct Configuration (appsettings.json - for local dev ONLY, NOT for production secrets)
 
-        public Task<X509Certificate2> GetCertificateAsync(string identifier)
-        {
-             _logger.LogWarning("Placeholder: Retrieving certificate '{Identifier}'. Actual certificate retrieval logic needed.", identifier);
-            // This would typically involve looking in the local certificate store or a secure vault.
-            // Example looking in local store (simplified, may require elevated permissions, and platform specifics):
-            /*
-            try
+            // Placeholder for Azure Key Vault or other vault integration:
+            // if (_secretClient != null)
+            // {
+            //     try
+            //     {
+            //         KeyVaultSecret secret = await _secretClient.GetSecretAsync(identifier, cancellationToken: cancellationToken);
+            //         credential = secret.Value;
+            //         _logger.LogInformation("Retrieved credential for identifier '{Identifier}' from Key Vault.", identifier);
+            //     }
+            //     catch (Exception ex) // Catch specific Azure.RequestFailedException if needed
+            //     {
+            //         _logger.LogWarning(ex, "Failed to retrieve credential for identifier '{Identifier}' from Key Vault. Falling back...", identifier);
+            //     }
+            // }
+
+            // Fallback to Environment Variables
+            if (string.IsNullOrEmpty(credential))
             {
-                // Using CurrentUser store for broad compatibility, but LocalMachine might be needed for service accounts.
-                using var store = new X509Store(StoreName.My, StoreLocation.CurrentUser);
-                store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
-                
-                // Find by thumbprint first (most specific)
-                var certs = store.Certificates.Find(X509FindType.FindByThumbprint, identifier, false); // Set validOnly=true in prod
-                if (certs.Count == 0)
+                credential = Environment.GetEnvironmentVariable(identifier);
+                if (!string.IsNullOrEmpty(credential))
                 {
-                    // Fallback: Find by Subject Name (less specific, use with caution if names are not unique)
-                    _logger.LogDebug("Certificate not found by thumbprint '{Identifier}', trying by subject name.", identifier);
-                    certs = store.Certificates.Find(X509FindType.FindBySubjectName, identifier, false);
+                    _logger.LogInformation("Retrieved credential for identifier '{Identifier}' from environment variable.", identifier);
+                }
+            }
+
+            // Fallback to IConfiguration (e.g., appsettings.json - for local development ONLY)
+            // Secrets should not be stored directly in appsettings.json in production.
+            // This path could be for non-sensitive config or dev overrides.
+            // A common pattern is "Secrets:MySecretName" or "ConnectionStrings:MyDb"
+            if (string.IsNullOrEmpty(credential))
+            {
+                credential = _configuration[identifier]; // Direct key lookup
+                if (string.IsNullOrEmpty(credential))
+                {
+                     // Try common prefix for secrets if not found directly
+                    credential = _configuration[$"Secrets:{identifier}"];
                 }
 
-                if (certs.Count > 0)
+                if (!string.IsNullOrEmpty(credential))
                 {
-                    _logger.LogDebug("Successfully found certificate matching '{Identifier}' in local store. Found {Count} matches, using first.", identifier, certs.Count);
-                    return Task.FromResult(certs[0]); // Return the first match
+                    _logger.LogWarning("Retrieved credential for identifier '{Identifier}' from IConfiguration. This is suitable for local development but NOT for production secrets.", identifier);
                 }
-                
-                _logger.LogError("Certificate '{Identifier}' not found in local certificate store (CurrentUser/My).", identifier);
-                throw new KeyNotFoundException($"Certificate '{identifier}' not found.");
             }
-            catch (System.Security.Cryptography.CryptographicException ex)
+
+
+            if (!string.IsNullOrEmpty(credential))
             {
-                _logger.LogError(ex, "Cryptographic error while accessing certificate store for '{Identifier}'. Check permissions or store existence.", identifier);
-                throw;
+                _cache[identifier] = (credential, DateTime.UtcNow.Add(_cacheDuration));
+                _logger.LogDebug("Cached credential for identifier: {Identifier}", identifier);
+                return credential;
             }
-            catch (Exception ex)
-            {
-                 _logger.LogError(ex, "Error retrieving certificate '{Identifier}'.", identifier);
-                 throw;
-            }
-            */
-            throw new KeyNotFoundException($"Placeholder: Certificate '{identifier}' not found in simulated store.");
+
+            _logger.LogError("Credential not found for identifier: {Identifier}", identifier);
+            return null;
         }
     }
 }

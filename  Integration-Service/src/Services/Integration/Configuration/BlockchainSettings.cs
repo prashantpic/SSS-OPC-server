@@ -1,51 +1,24 @@
-using IntegrationService.Configuration.Models;
-using System.Collections.Generic;
-
 namespace IntegrationService.Configuration
 {
-    /// <summary>
-    /// Configuration settings for Blockchain integration.
-    /// </summary>
-    public class BlockchainSettings
+    public class CriticalDataCriteriaConfig
     {
-        /// <summary>
-        /// Blockchain network details (e.g., RPC URL).
-        /// </summary>
-        public string RpcUrl { get; set; } = string.Empty;
-
-        /// <summary>
-        /// Chain ID for the blockchain network.
-        /// </summary>
-        public int ChainId { get; set; }
-
-        /// <summary>
-        /// Smart contract address for data logging.
-        /// </summary>
-        public string SmartContractAddress { get; set; } = string.Empty;
-
-        /// <summary>
-        /// Credential key to look up the private key in ICredentialManager.
-        /// </summary>
-        public string CredentialKey { get; set; } = string.Empty;
-
-        /// <summary>
-        /// Gas price strategy (e.g., Standard, Fast).
-        /// </summary>
-        public string GasPriceStrategy { get; set; } = "Standard";
-
-        /// <summary>
-        /// Criteria for determining what data is considered critical for logging.
-        /// </summary>
-        public CriticalDataCriteriaSettings CriticalDataCriteria { get; set; } = new CriticalDataCriteriaSettings();
+        public string SourceProperty { get; set; } = string.Empty; // e.g., "TagId", "Value.Status"
+        public string Operator { get; set; } = "Equals"; // e.g., "Equals", "Contains", "GreaterThan"
+        public string Value { get; set; } = string.Empty;
     }
 
-     namespace Models
+    public class BlockchainSettings
     {
-        public class CriticalDataCriteriaSettings
-        {
-            public bool Enabled { get; set; }
-            public List<string> OpcTagMatchPatterns { get; set; } = new List<string>();
-            public string MinSeverityLevel { get; set; } = "Warning"; // e.g., Information, Warning, Error
-        }
+        public const string SectionName = "Blockchain";
+
+        public bool IsEnabled { get; set; } = false;
+        public string RpcUrl { get; set; } = string.Empty;
+        public long ChainId { get; set; }
+        public string SmartContractAddress { get; set; } = string.Empty;
+        public string SmartContractAbiPath { get; set; } = "Adapters/Blockchain/SmartContracts/CriticalDataLog.abi.json";
+        public string CredentialIdentifier { get; set; } = string.Empty; // For the private key
+        public string GasPriceStrategy { get; set; } = "Medium"; // e.g., "Low", "Medium", "High", or specific Gwei value
+        public ulong MaxGasFee { get; set; } = 200000; // Max gas limit for transactions
+        public List<CriticalDataCriteriaConfig> CriticalDataCriteria { get; set; } = new List<CriticalDataCriteriaConfig>();
     }
 }

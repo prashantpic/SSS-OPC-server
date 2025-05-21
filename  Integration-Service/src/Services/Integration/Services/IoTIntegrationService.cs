@@ -1,278 +1,220 @@
-using IntegrationService.Configuration;
-using IntegrationService.Interfaces;
-using IntegrationService.Adapters.IoT.Models;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using IntegrationService.Resiliency;
-using IntegrationService.Validation;
-using Polly;
-using IntegrationService.Adapters.IoT; // Added for specific adaptor instantiation
-using System.Net.Http; // Added for IHttpClientFactory
-
 namespace IntegrationService.Services
 {
-    /// <summary>
-    /// Orchestrates IoT platform integrations, using adaptors, data mappers, and credential managers.
-    /// </summary>
+    using System.Collections.Concurrent;
+    using System.Linq;
+    using System.Text.Json;
+    using System.Threading;
+    using System.Threading.Tasks;
+    using FluentValidation;
+    using IntegrationService.Adapters.IoT.Models;
+    using IntegrationService.Configuration;
+    using IntegrationService.Interfaces;
+    using IntegrationService.Validation;
+    using Microsoft.Extensions.Logging;
+    using Microsoft.Extensions.Options;
+    using Polly.Wrap; // For combining policies if needed
+
     public class IoTIntegrationService
     {
         private readonly ILogger<IoTIntegrationService> _logger;
-        private readonly IntegrationSettings _settings;
+        private readonly IOptionsMonitor<IoTPlatformSettings> _iotPlatformSettings;
+        private readonly IEnumerable<IIoTPlatformAdaptor> _platformAdaptors;
         private readonly IDataMapper _dataMapper;
-        private readonly ICredentialManager _credentialManager;
-        private readonly RetryPolicyFactory _retryPolicyFactory;
-        private readonly CircuitBreakerPolicyFactory _circuitBreakerPolicyFactory;
+        private readonly ICredentialManager _credentialManager; // Assuming this is used by adaptors
         private readonly IncomingIoTDataValidator _dataValidator;
+        private readonly ConcurrentDictionary<string, IIoTPlatformAdaptor> _activeAdaptors = new();
+        private readonly ConcurrentDictionary<string, IoTPlatformConfig> _platformConfigs = new();
 
-        private readonly Dictionary<string, IIoTPlatformAdaptor> _adaptors = new Dictionary<string, IIoTPlatformAdaptor>();
-        private readonly IHttpClientFactory _httpClientFactory;
-        private readonly ILoggerFactory _loggerFactory; // To create specific loggers for adaptors
 
         public IoTIntegrationService(
             ILogger<IoTIntegrationService> logger,
-            IOptions<IntegrationSettings> settings,
+            IOptionsMonitor<IoTPlatformSettings> iotPlatformSettings,
+            IEnumerable<IIoTPlatformAdaptor> platformAdaptors,
             IDataMapper dataMapper,
             ICredentialManager credentialManager,
-            RetryPolicyFactory retryPolicyFactory,
-            CircuitBreakerPolicyFactory circuitBreakerPolicyFactory,
-            IncomingIoTDataValidator dataValidator,
-            IHttpClientFactory httpClientFactory,
-            ILoggerFactory loggerFactory)
+            IncomingIoTDataValidator dataValidator)
         {
-            _logger = logger;
-            _settings = settings.Value;
-            _dataMapper = dataMapper;
-            _credentialManager = credentialManager;
-            _retryPolicyFactory = retryPolicyFactory;
-            _circuitBreakerPolicyFactory = circuitBreakerPolicyFactory;
-            _dataValidator = dataValidator;
-            _httpClientFactory = httpClientFactory;
-            _loggerFactory = loggerFactory;
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _iotPlatformSettings = iotPlatformSettings ?? throw new ArgumentNullException(nameof(iotPlatformSettings));
+            _platformAdaptors = platformAdaptors ?? throw new ArgumentNullException(nameof(platformAdaptors));
+            _dataMapper = dataMapper ?? throw new ArgumentNullException(nameof(dataMapper));
+            _credentialManager = credentialManager; // Nullable if adaptors handle their own credential fetching via ICredentialManager
+            _dataValidator = dataValidator ?? throw new ArgumentNullException(nameof(dataValidator));
 
-            _logger.LogInformation("IoTIntegrationService initialized.");
-            InitializeAdaptors();
+            _iotPlatformSettings.OnChange(UpdatePlatformConfigurations);
+            UpdatePlatformConfigurations(_iotPlatformSettings.CurrentValue); // Initial load
         }
 
-        private void InitializeAdaptors()
+        private void UpdatePlatformConfigurations(IoTPlatformSettings settings)
         {
-             _logger.LogInformation("Initializing IoT adaptors...");
-            var iotSettings = _settings.IoTPlatformSettings;
-            var featureFlags = _settings.FeatureFlags;
+            _logger.LogInformation("Updating IoT platform configurations.");
+            var newConfigs = settings.Platforms.Where(p => p.IsEnabled).ToDictionary(p => p.Id);
 
-            foreach (var platformConfig in iotSettings.Platforms)
+            // Remove adaptors for platforms that are no longer configured or disabled
+            foreach (var existingId in _activeAdaptors.Keys.ToList())
             {
-                IIoTPlatformAdaptor? adaptor = null;
-                bool enabled = false;
-
-                switch (platformConfig.Type.ToUpperInvariant())
+                if (!newConfigs.ContainsKey(existingId))
                 {
-                    case "MQTT":
-                        if (featureFlags.EnableMqttIntegration)
-                        {
-                            adaptor = new MqttAdaptor(platformConfig,
-                                _loggerFactory.CreateLogger<MqttAdaptor>(),
-                                _credentialManager, _retryPolicyFactory, _circuitBreakerPolicyFactory);
-                            enabled = true;
-                        } else { _logger.LogInformation("MQTT integration is disabled by feature flag for platform '{PlatformId}'.", platformConfig.Id); }
-                        break;
-                    case "AMQP":
-                         if (featureFlags.EnableAmqpIntegration)
-                        {
-                            adaptor = new AmqpAdaptor(platformConfig,
-                                _loggerFactory.CreateLogger<AmqpAdaptor>(),
-                                _credentialManager, _retryPolicyFactory, _circuitBreakerPolicyFactory);
-                             enabled = true;
-                        } else { _logger.LogInformation("AMQP integration is disabled by feature flag for platform '{PlatformId}'.", platformConfig.Id); }
-                        break;
-                    case "HTTP":
-                         if (featureFlags.EnableHttpIoTIntegration)
-                        {
-                            adaptor = new HttpIoTAdaptor(platformConfig,
-                                _loggerFactory.CreateLogger<HttpIoTAdaptor>(),
-                                _credentialManager, _httpClientFactory, _retryPolicyFactory, _circuitBreakerPolicyFactory);
-                             enabled = true;
-                        } else { _logger.LogInformation("HTTP IoT integration is disabled by feature flag for platform '{PlatformId}'.", platformConfig.Id); }
-                        break;
-                    default:
-                        _logger.LogWarning("Unsupported IoT platform type configured: {PlatformType} for platform '{PlatformId}'. Skipping.", platformConfig.Type, platformConfig.Id);
-                        break;
-                }
-
-                if (adaptor != null && enabled)
-                {
-                    if (_adaptors.ContainsKey(adaptor.Id))
+                    if (_activeAdaptors.TryRemove(existingId, out var adaptorToDisconnect))
                     {
-                         _logger.LogWarning("Duplicate IoT platform configuration ID found: '{PlatformId}'. Only the first instance will be used.", adaptor.Id);
-                         (adaptor as IDisposable)?.Dispose();
+                        adaptorToDisconnect.DisconnectAsync(CancellationToken.None).ConfigureAwait(false); // Fire and forget disconnect
+                        _logger.LogInformation("Disconnected and removed adaptor for IoT platform ID: {PlatformId}", existingId);
                     }
-                    else
-                    {
-                        _adaptors.Add(adaptor.Id, adaptor);
-                         _logger.LogInformation("Added IoT adaptor '{Id}' of type {Type}.", adaptor.Id, platformConfig.Type);
-
-                        if (platformConfig.EnableBiDirectional && featureFlags.EnableBiDirectionalIoT)
-                        {
-                             _logger.LogInformation("Setting up command subscription for bi-directional IoT adaptor '{Id}'.", adaptor.Id);
-                             adaptor.SubscribeToCommandsAsync(cmd => HandleIncomingIoTCommand(cmd, adaptor.Id))
-                                 .ContinueWith(task =>
-                                 {
-                                     if (task.IsFaulted)
-                                     {
-                                         _logger.LogError(task.Exception, "Failed to subscribe to commands for IoT adaptor '{Id}'.", adaptor.Id);
-                                     }
-                                 });
-                        } else if (platformConfig.EnableBiDirectional && !featureFlags.EnableBiDirectionalIoT) {
-                             _logger.LogInformation("Bi-directional IoT integration is disabled by feature flag, skipping command subscription for adaptor '{Id}'.", adaptor.Id);
-                        }
-                    }
+                    _platformConfigs.TryRemove(existingId, out _);
                 }
             }
-             _logger.LogInformation("IoT adaptor initialization finished. {Count} adaptors initialized.", _adaptors.Count);
 
-            var mappingRuleIds = iotSettings.Platforms.Select(p => p.MappingRuleId).Where(id => !string.IsNullOrEmpty(id)).Distinct();
-            if (mappingRuleIds.Any())
+            // Add or update adaptors
+            foreach (var config in newConfigs.Values)
             {
-                _dataMapper.LoadAllConfiguredRulesAsync(mappingRuleIds).GetAwaiter().GetResult();
+                _platformConfigs[config.Id] = config;
+                if (!_activeAdaptors.ContainsKey(config.Id))
+                {
+                    InitializeAdaptorAsync(config, CancellationToken.None).ConfigureAwait(false);
+                }
+                // If an adaptor exists, its internal configuration might need updating if the adaptor supports it.
+                // For now, we re-initialize if critical parts change, or assume adaptors handle dynamic config.
             }
         }
 
-        public async Task ProcessIncomingOpcDataAsync(object opcData)
+        private async Task InitializeAdaptorAsync(IoTPlatformConfig config, CancellationToken cancellationToken)
         {
-             _logger.LogInformation("Processing incoming OPC data...");
-
-            foreach (var adaptorEntry in _adaptors)
+            var adaptor = _platformAdaptors.FirstOrDefault(a => a.AdaptorType.Equals(config.Type.ToString(), StringComparison.OrdinalIgnoreCase));
+            if (adaptor == null)
             {
-                var adaptorId = adaptorEntry.Key;
-                var adaptor = adaptorEntry.Value;
-                var platformConfig = _settings.IoTPlatformSettings.Platforms.FirstOrDefault(p => p.Id == adaptorId);
+                _logger.LogError("No IIoTPlatformAdaptor found for type: {PlatformType} and ID: {PlatformId}", config.Type, config.Id);
+                return;
+            }
 
-                if (platformConfig == null)
+            try
+            {
+                // Adaptors should be designed to be configurable with IoTPlatformConfig if not already done via DI and IOptions
+                // For example, if an adaptor is a singleton, it needs a way to handle multiple platform configs or be instantiated per config.
+                // Assuming here the IEnumerable<IIoTPlatformAdaptor> provides distinct, configurable adaptors, or a factory is used.
+                // A more robust approach might involve an IAdaptorFactory.
+
+                await adaptor.ConnectAsync(cancellationToken);
+                if (!string.IsNullOrEmpty(config.CommandTopic)) // Check if command subscription is configured
                 {
-                    _logger.LogError("Configuration not found for initialized adaptor '{AdaptorId}'. Skipping.", adaptorId);
-                    continue;
+                     await adaptor.SubscribeToCommandsAsync(HandleIncomingIoTCommandAsync, cancellationToken);
+                }
+                _activeAdaptors[config.Id] = adaptor;
+                _logger.LogInformation("Successfully initialized and connected IoT platform adaptor for ID: {PlatformId}, Type: {PlatformType}", config.Id, config.Type);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to initialize or connect IoT platform adaptor for ID: {PlatformId}, Type: {PlatformType}", config.Id, config.Type);
+            }
+        }
+
+        public async Task ProcessAndSendDataToIoTPlatformAsync(object opcData, string targetPlatformId, CancellationToken cancellationToken)
+        {
+            if (!_platformConfigs.TryGetValue(targetPlatformId, out var platformConfig) || !_activeAdaptors.TryGetValue(targetPlatformId, out var adaptor))
+            {
+                _logger.LogWarning("IoT Platform with ID '{PlatformId}' not found or not active. Cannot send data.", targetPlatformId);
+                return;
+            }
+
+            try
+            {
+                IoTDataMessage? externalData = null;
+                if (!string.IsNullOrEmpty(platformConfig.MappingRuleId) || !string.IsNullOrEmpty(platformConfig.MappingRulePath))
+                {
+                    var mappingId = platformConfig.MappingRuleId ?? platformConfig.MappingRulePath;
+                    externalData = await _dataMapper.MapToExternalFormatAsync<object, IoTDataMessage>(opcData, mappingId!, cancellationToken);
+                }
+                else
+                {
+                    // Attempt direct conversion or use a default mapping if opcData is already IoTDataMessage-like
+                    if (opcData is IoTDataMessage directMessage) externalData = directMessage;
+                    else if (opcData is JsonElement jsonElement) externalData = JsonSerializer.Deserialize<IoTDataMessage>(jsonElement); // Basic assumption
+                    // Add more sophisticated default mapping if needed
                 }
 
-                if (!adaptor.IsConnected)
+                if (externalData == null)
                 {
-                     _logger.LogWarning("IoT adaptor '{AdaptorId}' is not connected. Attempting to connect before sending data.", adaptorId);
-                    try
-                    {
-                         await adaptor.ConnectAsync();
-                    }
-                    catch (Exception ex)
-                    {
-                         _logger.LogError(ex, "Failed to connect IoT adaptor '{AdaptorId}'. Cannot send data.", adaptorId);
-                         continue;
-                    }
+                    _logger.LogWarning("Failed to map OPC data to IoTDataMessage for platform ID: {PlatformId}", targetPlatformId);
+                    return;
                 }
 
+                var validationResult = await _dataValidator.ValidateAsync(externalData, cancellationToken);
+                if (!validationResult.IsValid)
+                {
+                    _logger.LogWarning("Outgoing IoTDataMessage failed validation for platform ID {PlatformId}: {ValidationErrors}",
+                        targetPlatformId, string.Join(", ", validationResult.Errors.Select(e => e.ErrorMessage)));
+                    return;
+                }
+
+                _logger.LogDebug("Publishing telemetry to IoT platform {PlatformId}: {Payload}", targetPlatformId, JsonSerializer.Serialize(externalData.Payload));
+                await adaptor.PublishTelemetryAsync(externalData, cancellationToken);
+                _logger.LogInformation("Successfully sent data to IoT Platform ID: {PlatformId}", targetPlatformId);
+
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing and sending data to IoT Platform ID: {PlatformId}", targetPlatformId);
+            }
+        }
+        
+        public async Task ProcessAndSendDataToAllConfiguredPlatformsAsync(object opcData, CancellationToken cancellationToken)
+        {
+            foreach (var platformId in _activeAdaptors.Keys)
+            {
+                await ProcessAndSendDataToIoTPlatformAsync(opcData, platformId, cancellationToken);
+            }
+        }
+
+
+        private async Task HandleIncomingIoTCommandAsync(IoTCommand command)
+        {
+            _logger.LogInformation("Received command: {CommandName} for device: {DeviceId} with CorrelationId: {CorrelationId}",
+                command.CommandName, command.TargetDeviceId, command.CorrelationId);
+
+            // Validate command
+            // var validationResult = await _commandValidator.ValidateAsync(command); // Assuming a command validator
+            // if (!validationResult.IsValid)
+            // {
+            //     _logger.LogWarning("Incoming IoTCommand failed validation: {ValidationErrors}", string.Join(", ", validationResult.Errors.Select(e => e.ErrorMessage)));
+            //     // Optionally send a NACK or error response if supported by the platform
+            //     return;
+            // }
+
+            // Map command to internal format if necessary
+            // object internalCommand = command; // Default if no mapping
+            // if (platformConfig.CommandMappingRuleId != null)
+            // {
+            //     internalCommand = await _dataMapper.MapToInternalFormatAsync<IoTCommand, object>(command, platformConfig.CommandMappingRuleId, CancellationToken.None);
+            // }
+
+            // TODO: Dispatch the command. This could involve:
+            // 1. Publishing to an internal message queue for REPO-OPC-CORE or another service to pick up.
+            // 2. Directly calling another service if tightly coupled (not recommended in microservices).
+            // 3. Storing it for later processing.
+            _logger.LogInformation("Command {CommandName} for device {DeviceId} received. Dispatch logic to be implemented.", command.CommandName, command.TargetDeviceId);
+
+            // Example: If a response is expected and the adaptor supports it
+            // var response = new IoTCommandResponse(command.CorrelationId, JsonDocument.Parse("{\"status\":\"received\"}").RootElement, true);
+            // await adaptor.SendIoTCommandResponseAsync(response, CancellationToken.None);
+        }
+
+        public async Task StopAllAdaptorsAsync(CancellationToken cancellationToken)
+        {
+            _logger.LogInformation("Stopping all IoT adaptors...");
+            foreach (var adaptorEntry in _activeAdaptors)
+            {
                 try
                 {
-                     IoTDataMessage iotMessage;
-                    if (!string.IsNullOrEmpty(platformConfig.MappingRuleId) && _settings.FeatureFlags.EnableIoTRuleBasedMapping)
-                    {
-                        if (!_dataMapper.AreRulesLoaded(platformConfig.MappingRuleId))
-                        {
-                            _logger.LogWarning("Mapping rules '{MappingRuleId}' for adaptor '{AdaptorId}' are not loaded. Attempting to load.", platformConfig.MappingRuleId, adaptorId);
-                            await _dataMapper.LoadMappingRulesAsync(platformConfig.MappingRuleId);
-                             if (!_dataMapper.AreRulesLoaded(platformConfig.MappingRuleId))
-                             {
-                                 _logger.LogError("Failed to load mapping rules '{MappingRuleId}' for adaptor '{AdaptorId}'. Cannot map and send data.", platformConfig.MappingRuleId, adaptorId);
-                                 continue;
-                             }
-                        }
-                         _logger.LogDebug("Mapping OPC data using rules '{MappingRuleId}' for adaptor '{AdaptorId}'.", platformConfig.MappingRuleId, adaptorId);
-                        iotMessage = _dataMapper.Map<object, IoTDataMessage>(opcData, platformConfig.MappingRuleId);
-                    }
-                    else
-                    {
-                         _logger.LogDebug("Rule-based mapping disabled or no rule ID for adaptor '{AdaptorId}'. Using direct mapping (placeholder).", adaptorId);
-                        iotMessage = new IoTDataMessage
-                        {
-                             DeviceId = opcData.GetType().GetProperty("TagId")?.GetValue(opcData)?.ToString() ?? "PlaceholderDeviceId",
-                             Timestamp = (DateTimeOffset)(opcData.GetType().GetProperty("Timestamp")?.GetValue(opcData) ?? DateTimeOffset.UtcNow),
-                             Payload = opcData.GetType().GetProperty("Value")?.GetValue(opcData) ?? opcData,
-                             Metadata = new Dictionary<string, string>() { { "SourceAdaptor", adaptorId } }
-                        };
-                         _logger.LogWarning("Using placeholder direct mapping for adaptor '{AdaptorId}'. Implement logic to map OPC data to IoTDataMessage when rules are not used.", adaptorId);
-                    }
-
-                    if (!_dataValidator.Validate(iotMessage))
-                    {
-                         _logger.LogWarning("Mapped IoT data for adaptor '{AdaptorId}' failed validation. Skipping send for DeviceId: {DeviceId}", adaptorId, iotMessage.DeviceId);
-                        continue;
-                    }
-
-                     await adaptor.SendTelemetryAsync(iotMessage);
-                     _logger.LogInformation("Successfully processed and sent data for device {DeviceId} via IoT adaptor '{AdaptorId}'.", iotMessage.DeviceId, adaptorId);
-
+                    await adaptorEntry.Value.DisconnectAsync(cancellationToken);
+                    _logger.LogInformation("Disconnected adaptor for IoT platform ID: {PlatformId}", adaptorEntry.Key);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error processing or sending OPC data via IoT adaptor '{AdaptorId}'.", adaptorId);
+                    _logger.LogWarning(ex, "Error disconnecting adaptor for IoT platform ID: {PlatformId}", adaptorEntry.Key);
                 }
             }
-        }
-
-        private void HandleIncomingIoTCommand(IoTCommand command, string sourceAdaptorId)
-        {
-             _logger.LogInformation("Received incoming IoT command '{CommandName}' for device '{TargetDeviceId}' from adaptor '{SourceAdaptorId}' (CorrelationId: {CorrelationId})",
-                command.CommandName, command.TargetDeviceId, sourceAdaptorId, command.CorrelationId);
-
-            _logger.LogWarning("Placeholder: Received incoming IoT command from '{SourceAdaptorId}'. Implement logic to process command and interact with target systems.", sourceAdaptorId);
-
-             if (!string.IsNullOrEmpty(command.CorrelationId))
-             {
-                 if (_adaptors.TryGetValue(sourceAdaptorId, out var receivingAdaptor))
-                 {
-                     var responsePayload = new { status = "CommandReceived_Placeholder", commandId = command.CorrelationId, details = "Processing logic not yet implemented." };
-                     receivingAdaptor.SendCommandResponseAsync(command.CorrelationId, responsePayload)
-                         .ContinueWith(task => {
-                             if (task.IsFaulted) _logger.LogError(task.Exception, "Failed to send command response for command {CommandId} via adaptor {SourceAdaptorId}.", command.CorrelationId, sourceAdaptorId);
-                             else _logger.LogInformation("Sent placeholder response for command {CommandId} via adaptor {SourceAdaptorId}.", command.CorrelationId, sourceAdaptorId);
-                         });
-                 } else {
-                     _logger.LogError("Source adaptor ID '{SourceAdaptorId}' not found for sending command response.", sourceAdaptorId);
-                 }
-             }
-        }
-
-        public async Task ConnectAllAdaptorsAsync()
-        {
-             _logger.LogInformation("Attempting to connect all initialized IoT adaptors...");
-            var connectTasks = _adaptors.Values.Select(adaptor => adaptor.ConnectAsync().ContinueWith(task =>
-            {
-                if (task.IsFaulted)
-                {
-                     _logger.LogError(task.Exception, "Failed to connect IoT adaptor '{AdaptorId}'.", adaptor.Id);
-                } else {
-                     _logger.LogInformation("IoT adaptor '{AdaptorId}' connection task completed. IsConnected: {IsConnected}", adaptor.Id, adaptor.IsConnected);
-                }
-            })).ToList();
-
-            await Task.WhenAll(connectTasks);
-             _logger.LogInformation("Finished attempting to connect all IoT adaptors.");
-        }
-
-         public async Task DisconnectAllAdaptorsAsync()
-        {
-             _logger.LogInformation("Attempting to disconnect all initialized IoT adaptors...");
-            var disconnectTasks = _adaptors.Values.Select(adaptor => adaptor.DisconnectAsync().ContinueWith(task =>
-            {
-                if (task.IsFaulted)
-                {
-                     _logger.LogError(task.Exception, "Failed to disconnect IoT adaptor '{AdaptorId}'.", adaptor.Id);
-                } else {
-                     _logger.LogInformation("IoT adaptor '{AdaptorId}' disconnection task completed.", adaptor.Id);
-                }
-            })).ToList();
-
-            await Task.WhenAll(disconnectTasks);
-             _logger.LogInformation("Finished attempting to disconnect all IoT adaptors.");
+            _activeAdaptors.Clear();
+            _platformConfigs.Clear();
+            _logger.LogInformation("All IoT adaptors stopped.");
         }
     }
 }

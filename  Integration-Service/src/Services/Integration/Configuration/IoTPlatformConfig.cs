@@ -1,59 +1,46 @@
-using IntegrationService.Configuration.Models;
-
 namespace IntegrationService.Configuration
 {
-    /// <summary>
-    /// Configuration for a single IoT Platform.
-    /// </summary>
-    public class IoTPlatformConfig
+    public enum IoTPlatformType
     {
-        /// <summary>
-        /// Unique identifier for this IoT platform configuration.
-        /// </summary>
-        public string Id { get; set; } = string.Empty;
-
-        /// <summary>
-        /// The type of IoT platform protocol (e.g., MQTT, AMQP, HTTP).
-        /// </summary>
-        public string Type { get; set; } = string.Empty;
-
-        /// <summary>
-        /// The connection endpoint for the IoT platform.
-        /// </summary>
-        public string Endpoint { get; set; } = string.Empty;
-
-        /// <summary>
-        /// Authentication details or references (e.g., to ICredentialManager).
-        /// </summary>
-        public AuthenticationSettings Authentication { get; set; } = new AuthenticationSettings();
-
-        /// <summary>
-        /// Data serialization format (e.g., JSON, Protobuf).
-        /// </summary>
-        public string DataFormat { get; set; } = string.Empty;
-
-        /// <summary>
-        /// Identifier or path for data mapping rules specific to this platform.
-        /// </summary>
-        public string MappingRuleId { get; set; } = string.Empty;
-        
-        /// <summary>
-        /// Indicates if bi-directional communication (commands, setpoints) is enabled.
-        /// </summary>
-        public bool EnableBiDirectional { get; set; }
+        MQTT,
+        AMQP,
+        HTTP
     }
 
-    namespace Models
+    public class AuthenticationConfig
     {
-        public class AuthenticationSettings
-        {
-            public string Type { get; set; } = string.Empty; // e.g., UsernamePassword, Certificate, ApiKey, ManagedIdentity, ServicePrincipal
-            public string Username { get; set; } = string.Empty; // For UsernamePassword
-            public string CredentialKey { get; set; } = string.Empty; // Key to lookup secret in ICredentialManager
-            public string CertificateThumbprint { get; set; } = string.Empty; // For Certificate auth
-            public string ApiKeyHeaderName { get; set; } = string.Empty; // For API Key auth
-            public string ClientId { get; set; } = string.Empty; // For ServicePrincipal
-            public string TenantId { get; set; } = string.Empty; // For ManagedIdentity or ServicePrincipal
-        }
+        public string Type { get; set; } = "None"; // e.g., "ApiKey", "OAuth2", "UsernamePassword", "Certificate", "None"
+        public string? CredentialIdentifier { get; set; }
+        // Example for Username/Password or API Key
+        public string? Username { get; set; }
+        public string? PasswordSecretIdentifier { get; set; } // Reference to ICredentialManager
+        public string? ApiKeySecretIdentifier { get; set; } // Reference to ICredentialManager
+        // Example for Certificate
+        public string? ClientCertificatePath { get; set; }
+        public string? ClientCertificatePasswordSecretIdentifier { get; set; }
+    }
+
+    public class IoTPlatformConfig
+    {
+        public string Id { get; set; } = string.Empty;
+        public IoTPlatformType Type { get; set; }
+        public string Endpoint { get; set; } = string.Empty;
+        public AuthenticationConfig Authentication { get; set; } = new AuthenticationConfig();
+        public string DataFormat { get; set; } = "JSON"; // e.g., JSON, Protobuf
+        public string? MappingRuleId { get; set; }
+        public string? MappingRulePath { get; set; }
+        public bool IsEnabled { get; set; } = true;
+
+        // MQTT specific
+        public string? MqttClientId { get; set; }
+        public string? DefaultTelemetryTopic { get; set; }
+        public string? CommandTopic { get; set; }
+        public int MqttQoSLevel { get; set; } = 1; // 0, 1, or 2
+
+        // AMQP specific
+        public string? AmqpEntityPath { get; set; } // e.g., queue name or topic name
+
+        // HTTP specific
+        public Dictionary<string, string> DefaultHeaders { get; set; } = new Dictionary<string, string>();
     }
 }
