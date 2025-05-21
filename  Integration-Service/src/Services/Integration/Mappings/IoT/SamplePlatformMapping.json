@@ -1,0 +1,51 @@
+{
+  "Description": "Maps internal OPC data structure to SamplePlatform IoT message format.",
+  "SourceFormat": "GenericOpcData",
+  "TargetFormat": "IoTDataMessage_SamplePlatform",
+  "Version": "1.0.1",
+  "Rules": [
+    {
+      "SourceField": "TagId",
+      "TargetField": "deviceId",
+      "Transformation": null,
+      "Description": "Directly map OPC TagId to platform's deviceId field."
+    },
+    {
+      "SourceField": "Value",
+      "TargetField": "payload.value",
+      "Transformation": {
+        "Type": "ScaleAndOffset",
+        "ScaleFactor": 1.0,
+        "Offset": 0.0
+      },
+      "Description": "Map OPC Value to payload.value, optionally apply scaling/offset."
+    },
+    {
+      "SourceField": "Timestamp",
+      "TargetField": "timestamp",
+      "Transformation": {
+        "Type": "FormatDateTime",
+        "FormatString": "o" 
+      },
+      "Description": "Map OPC Timestamp to platform's timestamp, ensure ISO 8601 format."
+    },
+    {
+      "SourceField": "Quality",
+      "TargetField": "payload.quality",
+      "Transformation": null,
+      "Description": "Map OPC Quality to payload.quality."
+    },
+    {
+      "SourceField": "SourceApplication", 
+      "TargetField": "metadata.sourceApp",
+      "Transformation": null,
+      "Description": "Map an internal source application identifier to metadata."
+    },
+    {
+      "ConstantValue": "telemetry",
+      "TargetField": "messageType",
+      "Description": "Set a constant value for messageType."
+    }
+  ],
+  "Notes": "This is a sample mapping. Actual fields and transformations will depend on the source OPC data structure and the target IoT platform's schema requirements. The DataMappingService will interpret these rules."
+}
