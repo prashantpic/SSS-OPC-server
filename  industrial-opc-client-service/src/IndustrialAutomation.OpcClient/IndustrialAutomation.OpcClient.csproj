@@ -4,44 +4,60 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <UserSecretsId>dotnet-IndustrialAutomation.OpcClient-SOME_GUID</UserSecretsId>
+    <OutputType>Exe</OutputType>
     <RootNamespace>IndustrialAutomation.OpcClient</RootNamespace>
-    <AssemblyName>IndustrialAutomation.OpcClient</AssemblyName>
+    <UserSecretsId>dotnet-IndustrialAutomation.OpcClient-SOME_UNIQUE_GUID</UserSecretsId> <!-- Example, can be removed or changed -->
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Confluent.Kafka" Version="2.3.0" />
-    <PackageReference Include="Grpc.Net.Client" Version="2.60.0" />
+    <PackageReference Include="CsvHelper" Version="32.0.3" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.17.0" />
-    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua" Version="1.5.376.100" />
-    <PackageReference Include="Polly" Version="8.3.0" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.18.0" />
+    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua" Version="1.5.376.113" />
+    <PackageReference Include="Polly" Version="8.4.0" />
+    
+    <!-- gRPC -->
+    <PackageReference Include="Grpc.Net.Client" Version="2.63.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.64.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Google.Protobuf" Version="3.27.0" />
+
+
+    <!-- Message Queues -->
     <PackageReference Include="RabbitMQ.Client" Version="6.8.1" />
+    <PackageReference Include="Confluent.Kafka" Version="2.4.0" />
+
+    <!-- Logging -->
     <PackageReference Include="Serilog" Version="3.1.1" />
     <PackageReference Include="Serilog.Extensions.Hosting" Version="8.0.0" />
     <PackageReference Include="Serilog.Settings.Configuration" Version="8.0.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="5.0.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />
-    <PackageReference Include="Grpc.Tools" Version="2.60.0">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
+    <PackageReference Include="Serilog.Enrichers.Environment" Version="2.3.0" />
+    <PackageReference Include="Serilog.Enrichers.Process" Version="2.0.2" />
+    <PackageReference Include="Serilog.Enrichers.Thread" Version="3.1.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="Infrastructure\ServerConnectivity\Grpc\Protos\common.proto" GrpcServices="Client" Link="Protos\common.proto" />
-    <Protobuf Include="Infrastructure\ServerConnectivity\Grpc\Protos\opc_client_management.proto" GrpcServices="Client" Link="Protos\opc_client_management.proto" />
-    <Protobuf Include="Infrastructure\ServerConnectivity\Grpc\Protos\data_ingestion.proto" GrpcServices="Client" Link="Protos\data_ingestion.proto" />
+    <Protobuf Include="Infrastructure\ServerConnectivity\Grpc\Protos\common.proto" GrpcServices="Client" ProtoRoot="Infrastructure\ServerConnectivity\Grpc\Protos\" Access="Public" />
+    <Protobuf Include="Infrastructure\ServerConnectivity\Grpc\Protos\opc_client_management.proto" GrpcServices="Client" ProtoRoot="Infrastructure\ServerConnectivity\Grpc\Protos\" Access="Public" />
+    <Protobuf Include="Infrastructure\ServerConnectivity\Grpc\Protos\data_ingestion.proto" GrpcServices="Client" ProtoRoot="Infrastructure\ServerConnectivity\Grpc\Protos\" Access="Public" />
   </ItemGroup>
-
+  
   <ItemGroup>
-    <Content Update="appsettings.json">
+    <Content Include="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Update="appsettings.Development.json">
+    <Content Include="appsettings.*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <DependentUpon>appsettings.json</DependentUpon>
     </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="Infrastructure\ServerConnectivity\Grpc\Protos\common.proto~RF16494814.TMP" />
   </ItemGroup>
 
 </Project>
