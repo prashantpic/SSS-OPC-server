@@ -7,20 +7,10 @@ namespace IndustrialAutomation.OpcClient.Infrastructure.OpcClients.Ac
 {
     public interface IOpcAcClient : IOpcConnection
     {
-        // Event to notify subscribers (e.g., OpcCommunicationService) of new alarms/events
-        event EventHandler<AcAlarmEventDto> AlarmEventReceived;
+        event Action<AcAlarmEventDto> AlarmEventReceived;
 
-        // Method to start subscribing to events from the A&C server.
-        // Specific subscription parameters (filters, areas) might be passed here or configured internally.
-        Task<bool> SubscribeToEventsAsync(); // Or pass filter criteria
-
-        // Method to acknowledge an event.
-        // eventId typically corresponds to the AcAlarmEventDto.EventId or a server-specific cookie.
+        Task SubscribeToEventsAsync(); // Or provide configuration for filtering events
         Task<bool> AcknowledgeEventAsync(string eventId, string user, string comment);
-
-        // Potentially methods for other A&C operations like:
-        // - Enable/Disable conditions
-        // - GetConditionState
-        // - Refresh (for current active alarms)
+        // Potentially methods for other A&C features like Enable/Disable conditions, Refresh, etc.
     }
 }

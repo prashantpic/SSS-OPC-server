@@ -1,5 +1,6 @@
 using IndustrialAutomation.OpcClient.Application.DTOs.ServerCommunication;
 using IndustrialAutomation.OpcClient.Application.DTOs.EdgeAi; // For EdgeModelOutputDto
+using System;
 using System.Threading.Tasks;
 
 namespace IndustrialAutomation.OpcClient.Infrastructure.ServerConnectivity.Messaging
@@ -12,8 +13,6 @@ namespace IndustrialAutomation.OpcClient.Infrastructure.ServerConnectivity.Messa
         Task PublishCriticalWriteLogAsync(CriticalWriteLogDto log);
         Task PublishAuditEventAsync(AuditEventDto auditEvent);
         Task PublishSubscriptionStatusAsync(SubscriptionStatusDto status);
-        Task PublishEdgeAiOutputAsync(EdgeModelOutputDto output);
-
-        Task<bool> IsConnectedAsync(); // To check broker connectivity
+        Task PublishEdgeAiOutputAsync(EdgeModelOutputDto output); // Added for completeness
     }
 }

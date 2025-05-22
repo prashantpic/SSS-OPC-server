@@ -1,16 +1,13 @@
-using IndustrialAutomation.OpcClient.Application.DTOs.Common;
 using System.Collections.Generic;
+using IndustrialAutomation.OpcClient.Application.DTOs.Common;
 
 namespace IndustrialAutomation.OpcClient.Application.DTOs.Hda
 {
-    public record HdaReadResponseDto
-    {
-        public string ServerId { get; init; } = string.Empty;
-        public string CorrelationId { get; init; } = string.Empty;
-        // Using a dictionary where key is TagId and value is a list of its historical points
-        public Dictionary<string, List<OpcPointDto>> HistoricalData { get; init; } = new Dictionary<string, List<OpcPointDto>>();
-        public bool Success { get; init; }
-        public string StatusCode { get; init; } = string.Empty; // Overall status for the HDA read operation
-        public string? ErrorMessage { get; init; }
-    }
+    public record HdaReadResponseDto(
+        string ServerId,
+        List<OpcPointDto> HistoricalData, // Flattened list; can be grouped by TagId by consumer if needed
+        bool Success,
+        string? StatusCode, // OPC HDA status code or internal status
+        string? ErrorMessage
+    );
 }

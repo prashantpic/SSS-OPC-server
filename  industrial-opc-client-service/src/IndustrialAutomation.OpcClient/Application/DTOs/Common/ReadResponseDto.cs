@@ -2,13 +2,11 @@ using System.Collections.Generic;
 
 namespace IndustrialAutomation.OpcClient.Application.DTOs.Common
 {
-    public record ReadResponseDto
-    {
-        public string ServerId { get; init; } = string.Empty;
-        public string CorrelationId { get; init; } = string.Empty;
-        public List<OpcPointDto> Values { get; init; } = new List<OpcPointDto>();
-        public bool Success { get; init; }
-        public string StatusCode { get; init; } = string.Empty; // Overall status for the batch read
-        public string? ErrorMessage { get; init; }
-    }
+    public record ReadResponseDto(
+        string ServerId,
+        List<OpcPointDto> Values,
+        bool Success,
+        string? StatusCode, // OPC status code or internal status
+        string? ErrorMessage
+    );
 }

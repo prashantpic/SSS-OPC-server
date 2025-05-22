@@ -1,10 +1,9 @@
-using IndustrialAutomation.OpcClient.Application.DTOs.ServerCommunication; // For CriticalWriteLogDto
-using System.Threading.Tasks;
+using IndustrialAutomation.OpcClient.Application.DTOs.ServerCommunication;
 
 namespace IndustrialAutomation.OpcClient.Infrastructure.Logging
 {
     public interface ICriticalWriteLogger
     {
-        Task LogCriticalWriteAsync(CriticalWriteLogDto logEntry);
+        void LogCriticalWrite(CriticalWriteLogDto logEntry);
     }
 }

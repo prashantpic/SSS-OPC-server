@@ -1,54 +1,47 @@
 syntax = "proto3";
 
-import "google/protobuf/struct.proto"; // For Value type, allows arbitrary JSON-like objects
-import "google/protobuf/timestamp.proto";
-import "common.proto"; // Import common messages
+import "common.proto"; // If common types are used
 
-option csharp_namespace = "IndustrialAutomation.OpcClient.Protos.Management";
+option csharp_namespace = "IndustrialAutomation.OpcClient.Infrastructure.ServerConnectivity.Grpc.Generated";
 
-package opc_client_management;
+package OpcClientManagement;
 
-// Service for managing OPC Client instances
-service ClientManagement {
-    // Requests the current configuration for a specific client
+// Service for managing OPC client instances
+service ClientManagementService {
+    // Gets the full configuration for a client
     rpc GetConfiguration (GetConfigurationRequest) returns (ClientConfigurationResponse);
-    // Sends the client's health status to the server
-    rpc SendClientStatus (ClientHealthStatusMessage) returns (common.StatusResponse);
-    // Requests a specific AI model from the server
-    rpc GetModel (GetModelRequest) returns (ModelUpdateMessage);
-    // OPC Client reports its current full configuration (less common, usually server pushes)
-    // rpc ReportCurrentConfiguration (ClientConfigurationMessage) returns (common.StatusResponse);
+    // Client sends its health status
+    rpc SendClientStatus (ClientHealthStatusRequest) returns (GrpcCommon.StatusResponse);
+    // Server pushes an AI model update to the client
+    rpc UpdateEdgeModel (UpdateEdgeModelRequest) returns (GrpcCommon.StatusResponse);
+    // Client requests a specific AI model (e.g., on startup or if missing)
+    rpc RequestEdgeModel (RequestEdgeModelRequest) returns (EdgeModelPackage);
 }
 
-// Request to get configuration
+// ========== Configuration Messages ==========
 message GetConfigurationRequest {
     string client_id = 1;
+    string current_config_version = 2; // Optional: for diffs or conditional updates
 }
 
-// --- OpcPoint ---
-message OpcPointMessage {
-    string tag_id = 1;
-    google.protobuf.Value value = 2; // Can represent various data types
-    google.protobuf.Timestamp timestamp = 3;
-    string quality_status = 4;
+message ClientConfigurationResponse {
+    ClientConfiguration configuration = 1;
+    string config_version = 2;
 }
 
-// --- ServerConnectionConfig ---
-message ServerConnectionConfigMessage {
+message ServerConnectionConfig {
     string server_id = 1;
-    string standard = 2; // e.g., "Ua", "Da"
+    string standard = 2; // "DA", "UA", "XMLDA", "HDA", "AC"
     string endpoint_url = 3;
     string security_policy_uri = 4;
-    string message_security_mode = 5; // e.g., "SignAndEncrypt"
+    string message_security_mode = 5;
     string user_identity_type = 6;
     string username = 7;
-    string password = 8; // Consider security implications if sent over gRPC
+    string password = 8; // Note: Sending passwords like this is not ideal. Consider secure secret management.
     string client_certificate_thumbprint = 9;
-    bool auto_accept_untrusted_certificates = 10;
 }
 
-// --- TagDefinition ---
-message TagDefinitionMessage {
+message TagDefinition {
     string tag_id = 1;
     string opc_address = 2;
     string server_id = 3;
@@ -57,45 +50,38 @@ message TagDefinitionMessage {
     double scaling_factor = 6;
     double offset = 7;
     bool is_active = 8;
-    bool is_readable = 9;
-    bool is_writable = 10;
-    string description = 11;
+    bool is_writable = 9;
 }
 
-// --- UaMonitoredItem ---
-message UaMonitoredItemMessage {
-    string client_tag_id = 1;
+message UaMonitoredItem {
+    string item_id = 1;
     string node_id = 2;
     double sampling_interval = 3;
     string data_change_trigger = 4;
-    uint32 queue_size = 5;
+    int32 queue_size = 5;
     bool discard_oldest = 6;
-    string monitoring_mode = 7; // e.g. "Reporting"
 }
 
-// --- UaSubscriptionConfig ---
-message UaSubscriptionConfigMessage {
+message UaSubscriptionConfig {
     string subscription_id = 1;
     string server_id = 2;
     double publishing_interval = 3;
-    uint32 lifetime_count = 4;
-    uint32 max_keep_alive_count = 5;
-    uint32 max_notifications_per_publish = 6;
+    int32 lifetime_count = 4;
+    int32 max_keep_alive_count = 5;
+    int32 max_notifications_per_publish = 6;
     bool publishing_enabled = 7;
-    uint32 priority = 8;
-    repeated UaMonitoredItemMessage monitored_items = 9;
+    bytes priority = 8; // byte in C# is uint32 in proto or bytes if single byte
+    repeated UaMonitoredItem monitored_items = 9;
 }
 
-// --- ValidationRule ---
-message ValidationRuleMessage {
+message ValidationRule {
     string tag_id = 1;
-    string rule_type = 2; // e.g., "RangeCheck"
-    string parameter_json = 3; // JSON string for rule parameters
+    string rule_type = 2;
+    string parameter_json = 3;
     bool enabled = 4;
 }
 
-// --- WriteLimitPolicy ---
-message WriteLimitPolicyMessage {
+message WriteLimitPolicy {
     string tag_id = 1;
     bool rate_limiting_enabled = 2;
     int32 max_writes_per_minute = 3;
@@ -104,54 +90,58 @@ message WriteLimitPolicyMessage {
     bool require_confirmation_below_threshold = 6;
 }
 
-// --- EdgeModelMetadata ---
-message EdgeModelMetadataMessage {
+message EdgeModelMetadata {
     string model_name = 1;
     string version = 2;
-    string file_path = 3; // Server might not need this, client manages local path
-    google.protobuf.Timestamp deployment_timestamp = 4;
-    map<string, string> input_schema = 5;
-    map<string, string> output_schema = 6;
-    string description = 7;
-    string framework = 8;
-    string checksum = 9;
-    string source_url = 10;
+    string friendly_name = 3;
+    string file_path_hint = 4; // Server might provide a hint, client resolves actual path
+    GrpcCommon.Timestamp deployment_timestamp_utc = 5;
+    map<string, string> input_schema = 6;
+    map<string, string> output_schema = 7;
+    string description = 8;
+    string execution_provider = 9;
 }
 
-// Response containing client configuration
-message ClientConfigurationResponse {
+message ClientConfiguration {
     string client_id = 1;
-    repeated ServerConnectionConfigMessage server_connections = 2;
-    repeated TagDefinitionMessage tag_definitions = 3;
-    repeated UaSubscriptionConfigMessage ua_subscriptions = 4;
-    repeated ValidationRuleMessage validation_rules = 5;
-    repeated WriteLimitPolicyMessage write_limit_policies = 6;
-    EdgeModelMetadataMessage active_edge_model = 7;
-    // Other config sections can be added here
+    repeated ServerConnectionConfig server_connections = 2;
+    repeated TagDefinition tag_definitions = 3;
+    repeated UaSubscriptionConfig ua_subscriptions = 4;
+    repeated ValidationRule validation_rules = 5;
+    repeated WriteLimitPolicy write_limit_policies = 6;
+    EdgeModelMetadata active_edge_model = 7;
+    map<string, string> general_settings = 8;
 }
 
-// Message for client health status
-message ClientHealthStatusMessage {
+// ========== Status Messages ==========
+message ClientHealthStatus {
     string client_id = 1;
-    google.protobuf.Timestamp timestamp_utc = 2;
+    GrpcCommon.Timestamp timestamp_utc = 2;
     string overall_status = 3;
     map<string, string> server_connection_statuses = 4;
     map<string, string> subscription_statuses = 5;
     int64 data_buffer_size = 6;
     double cpu_load = 7;
     double memory_usage = 8;
-    string last_error_message = 9;
-    map<string, string> component_details = 10;
 }
 
-// Request to get a model
-message GetModelRequest {
+message ClientHealthStatusRequest {
+    ClientHealthStatus status = 1;
+}
+
+// ========== Edge AI Model Management Messages ==========
+message UpdateEdgeModelRequest {
+    EdgeModelMetadata metadata = 1;
+    bytes model_content = 2; // The actual ONNX model file bytes
+}
+
+message RequestEdgeModelRequest {
     string model_name = 1;
-    string version = 2;
+    string version = 2; // "latest" or specific version
 }
 
-// Message for model update (metadata + bytes)
-message ModelUpdateMessage {
-    EdgeModelMetadataMessage metadata = 1;
-    bytes model_bytes = 2;
+message EdgeModelPackage {
+    EdgeModelMetadata metadata = 1;
+    bytes model_content = 2;
+    GrpcCommon.StatusResponse status = 3; // To indicate if model was found/packaged successfully
 }

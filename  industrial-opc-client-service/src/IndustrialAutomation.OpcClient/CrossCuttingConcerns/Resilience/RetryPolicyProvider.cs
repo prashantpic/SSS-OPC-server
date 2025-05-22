@@ -3,8 +3,9 @@ using Microsoft.Extensions.Logging;
 using Polly;
 using Polly.Retry;
 using System;
-using System.Net.Http;
-using Grpc.Core; // For gRPC status codes
+using System.IO;
+using System.Net.Sockets;
+using Grpc.Core; // For gRPC specific status codes
 
 namespace IndustrialAutomation.OpcClient.CrossCuttingConcerns.Resilience
 {
@@ -19,98 +20,52 @@ namespace IndustrialAutomation.OpcClient.CrossCuttingConcerns.Resilience
             _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         }
 
-        public AsyncRetryPolicy GetDefaultRetryPolicy(string policyName = "Default")
+        public AsyncRetryPolicy GetDefaultRetryPolicyAsync(string policyName = "Default")
         {
-            // Example: Read from configuration
-            int retryCount = _configuration.GetValue<int>($"ResiliencePolicies:{policyName}:RetryCount", 3);
-            int delaySeconds = _configuration.GetValue<int>($"ResiliencePolicies:{policyName}:DelaySeconds", 2);
+            var maxRetries = _configuration.GetValue<int>($"ResiliencePolicies:{policyName}:MaxRetries", 3);
+            var initialDelaySeconds = _configuration.GetValue<double>($"ResiliencePolicies:{policyName}:InitialDelaySeconds", 1.0);
+            var maxDelaySeconds = _configuration.GetValue<double>($"ResiliencePolicies:{policyName}:MaxDelaySeconds", 30.0);
 
             return Policy
-                .Handle<Exception>(ex => !(ex is OperationCanceledException)) // Don't retry on cancellation
-                .WaitAndRetryAsync(retryCount, retryAttempt => TimeSpan.FromSeconds(Math.Pow(delaySeconds, retryAttempt)),
-                    (exception, timeSpan, attempt, context) =>
-                    {
-                        _logger.LogWarning(exception, "Policy {PolicyName}: Retry attempt {Attempt} after {TimeSpan} due to {ExceptionType}.",
-                            policyName, attempt, timeSpan, exception.GetType().Name);
-                    });
-        }
-
-        public AsyncRetryPolicy GetOpcConnectionPolicy()
-        {
-            // Specific for OPC connection attempts
-            // Can handle Opc.Ua.ServiceResultException or other OPC specific exceptions
-            int retryCount = _configuration.GetValue<int>("ResiliencePolicies:OpcConnection:RetryCount", 5);
-            int initialDelayMs = _configuration.GetValue<int>("ResiliencePolicies:OpcConnection:InitialDelayMs", 1000);
-            int maxDelayMs = _configuration.GetValue<int>("ResiliencePolicies:OpcConnection:MaxDelayMs", 30000);
-
-
-            return Policy
-                .Handle<Opc.Ua.ServiceResultException>(ex => IsTransientOpcUaError(ex))
-                .Or<TimeoutException>()
-                .Or<System.Net.Sockets.SocketException>()
+                .Handle<Exception>(ex => IsTransient(ex)) // Generic transient exceptions
                 .WaitAndRetryAsync(
-                    retryCount,
-                    retryAttempt => TimeSpan.FromMilliseconds(Math.Min(initialDelayMs * Math.Pow(2, retryAttempt -1), maxDelayMs)), // Exponential backoff with jitter could be added
-                    (exception, timeSpan, attempt, context) =>
+                    maxRetries,
+                    retryAttempt => TimeSpan.FromSeconds(Math.Min(initialDelaySeconds * Math.Pow(2, retryAttempt -1), maxDelaySeconds)),
+                    (exception, timeSpan, retryCount, context) =>
                     {
-                        _logger.LogWarning(exception, "OPC Connection Policy: Retry attempt {Attempt} for {PolicyKey} after {TimeSpan} due to {ExceptionType} - {ExceptionMessage}.",
-                                           attempt, context.PolicyKey, timeSpan, exception.GetType().Name, exception.Message);
-                    })
-                .WithPolicyKey("OpcConnectionRetry");
+                        _logger.LogWarning(exception, "[{PolicyName}] Retry {RetryCount} encountered after {TimeSpan}. Operation Key: {OperationKey}",
+                            policyName, retryCount, timeSpan, context.OperationKey);
+                    }
+                );
         }
 
-        public AsyncRetryPolicy GetServerCommsPolicy() // For gRPC or Message Queue
-        {
-            int retryCount = _configuration.GetValue<int>("ResiliencePolicies:ServerCommunication:RetryCount", 3);
-            double jitterFactor = _configuration.GetValue<double>("ResiliencePolicies:ServerCommunication:JitterFactor", 0.2);
+        public AsyncRetryPolicy GetOpcConnectionPolicy() => GetDefaultRetryPolicyAsync("OpcConnection");
+        public AsyncRetryPolicy GetServerCommsPolicy() => GetDefaultRetryPolicyAsync("ServerComms");
+        public AsyncRetryPolicy GetSubscriptionReestablishmentPolicy() => GetDefaultRetryPolicyAsync("SubscriptionReestablishment");
 
 
-            return Policy
-                .Handle<HttpRequestException>() // For gRPC HTTP errors
-                .Or<RpcException>(ex => IsTransientGrpcError(ex.StatusCode)) // For gRPC specific transient errors
-                .Or<RabbitMQ.Client.Exceptions.BrokerUnreachableException>() // For RabbitMQ
-                .Or<Confluent.Kafka.ProduceException>(ex => ex.Error.IsBrokerError || ex.Error.IsLocalError) // For Kafka
-                .Or<TimeoutException>()
-                .WaitAndRetryAsync(
-                    retryCount,
-                    retryAttempt =>
-                    {
-                        var delay = TimeSpan.FromSeconds(Math.Pow(2, retryAttempt));
-                        var jitter = TimeSpan.FromMilliseconds(new Random().Next(0, (int)(delay.TotalMilliseconds * jitterFactor)));
-                        return delay + jitter;
-                    },
-                    (exception, timeSpan, attempt, context) =>
-                    {
-                        _logger.LogWarning(exception, "Server Communication Policy: Retry attempt {Attempt} for {PolicyKey} after {TimeSpan} due to {ExceptionType} - {ExceptionMessage}.",
-                                           attempt, context.PolicyKey, timeSpan, exception.GetType().Name, exception.Message);
-                    })
-                .WithPolicyKey("ServerCommunicationRetry");
-        }
-        
-        private bool IsTransientOpcUaError(Opc.Ua.ServiceResultException ex)
+        private static bool IsTransient(Exception ex)
         {
-            // Add specific OPC UA status codes that are considered transient
-            // Example: Bad_Timeout, Bad_CommunicationError, Bad_ServerNotConnected
-            var transientCodes = new[] {
-                Opc.Ua.StatusCodes.BadTimeout,
-                Opc.Ua.StatusCodes.BadCommunicationError,
-                Opc.Ua.StatusCodes.BadServerNotConnected,
-                Opc.Ua.StatusCodes.BadServerHalted,
-                Opc.Ua.StatusCodes.BadTcpServerTooBusy,
-                Opc.Ua.StatusCodes.BadSecureChannelClosed,
-                Opc.Ua.StatusCodes.BadSessionClosed,
-                Opc.Ua.StatusCodes.BadSessionNotActivated
-            };
-            return transientCodes.Contains(ex.StatusCode);
-        }
+            if (ex is SocketException || ex is IOException || ex is TimeoutException)
+                return true;
 
-        private bool IsTransientGrpcError(StatusCode statusCode)
-        {
-            // See https://grpc.github.io/grpc/core/md_doc_statuscodes.html
-            return statusCode == StatusCode.Unavailable ||
-                   statusCode == StatusCode.DeadlineExceeded ||
-                   statusCode == StatusCode.ResourceExhausted || // Can sometimes be transient
-                   statusCode == StatusCode.Internal; // Often indicates server-side transient issues
+            if (ex is RpcException rpcException)
+            {
+                // Common gRPC transient error codes
+                return rpcException.StatusCode == StatusCode.Unavailable ||
+                       rpcException.StatusCode == StatusCode.DeadlineExceeded ||
+                       rpcException.StatusCode == StatusCode.ResourceExhausted; // Can sometimes be transient
+            }
+
+            // Add more specific exceptions for RabbitMQ, Kafka, OPC UA if needed
+            // For example, OPC UA specific status codes indicating server busy or temporary issues.
+            // if (ex is Opc.Ua.ServiceResultException sre)
+            // {
+            //    return sre.StatusCode == Opc.Ua.StatusCodes.BadServerNotConnected ||
+            //           sre.StatusCode == Opc.Ua.StatusCodes.BadTcpServerTooBusy;
+            // }
+
+            return false; // Default to non-transient
         }
     }
 }

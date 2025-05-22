@@ -1,20 +1,11 @@
 namespace IndustrialAutomation.OpcClient.Application.DTOs.Ua
 {
-    public record UaMonitoredItemDto
-    {
-        // Client's internal TagId, maps to a TagDefinitionDto.TagId
-        // This helps correlate notifications back to a known tag configuration.
-        public string ClientTagId { get; init; } = string.Empty;
-        
-        // The actual OPC UA NodeId string (e.g., "ns=2;s=MyDevice.Temperature")
-        // This comes from TagDefinitionDto.OpcAddress for UA tags.
-        public string NodeId { get; init; } = string.Empty; 
-
-        public double SamplingInterval { get; init; } = -1; // milliseconds, -1 for default/inherited from subscription, 0 for fastest
-        public string DataChangeTrigger { get; init; } = "StatusValue"; // "StatusValue", "StatusValueTimestamp"
-        public uint QueueSize { get; init; } = 1; // 0 or 1 for latest value only, >1 for queueing
-        public bool DiscardOldest { get; init; } = true; // If queue is full
-        public Opc.Ua.MonitoringMode MonitoringMode { get; init; } = Opc.Ua.MonitoringMode.Reporting;
-        public string? DisplayName { get; init; } // Optional, for easier identification
-    }
+    public record UaMonitoredItemDto(
+        string ItemId,         // Client-defined unique ID for this monitored item (can be same as TagId)
+        string NodeId,         // The OPC UA NodeId string to monitor
+        double SamplingInterval, // Requested sampling interval in milliseconds (0 for server default/fastest)
+        string DataChangeTrigger, // e.g., "StatusValue", "StatusValueTimestamp" (maps to Opc.Ua.DataChangeTrigger)
+        int QueueSize = 1,        // Client-side queue size for notifications (0 or 1 for latest only)
+        bool DiscardOldest = true // If queue overflows, discard oldest or newest
+    );
 }

@@ -1,14 +1,13 @@
-using IndustrialAutomation.OpcClient.Application.Interfaces;
 using IndustrialAutomation.OpcClient.Application.DTOs.EdgeAi;
+using IndustrialAutomation.OpcClient.Application.Interfaces;
 using IndustrialAutomation.OpcClient.Infrastructure.EdgeIntelligence;
-using IndustrialAutomation.OpcClient.Infrastructure.ServerConnectivity.Grpc;
 using IndustrialAutomation.OpcClient.Infrastructure.DataHandling;
 using IndustrialAutomation.OpcClient.Domain.Models; // For BufferedDataItem
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
-using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration; // For model path
 
 namespace IndustrialAutomation.OpcClient.Application.Services
 {
@@ -17,215 +16,144 @@ namespace IndustrialAutomation.OpcClient.Application.Services
         private readonly ILogger<EdgeIntelligenceService> _logger;
         private readonly IEdgeAiExecutor _aiExecutor;
         private readonly IModelRepository _modelRepository;
-        private readonly IServerAppGrpcClient? _grpcClient; // For model updates from server
-        private readonly IDataBufferer _dataBufferer; // To buffer AI outputs if server comms fail
-        private readonly IDataTransmissionService _dataTransmissionService; // To send AI outputs
+        private readonly IDataTransmissionService _dataTransmissionService; // To send AI output
+        private readonly IDataBufferer _dataBufferer; // To buffer AI output if transmission fails
+        private readonly string _defaultModelPath;
 
-        private ConcurrentDictionary<string, Domain.Models.EdgeAiModel> _loadedModels; // Domain model
+        private readonly ConcurrentDictionary<string, EdgeModelMetadataDto> _loadedModelsMetadata = new();
 
         public EdgeIntelligenceService(
             ILogger<EdgeIntelligenceService> logger,
             IEdgeAiExecutor aiExecutor,
             IModelRepository modelRepository,
-            IDataBufferer dataBufferer,
             IDataTransmissionService dataTransmissionService,
-            // IServerAppGrpcClient? grpcClient = null // Injected if available
-            IServiceProvider serviceProvider
-            )
+            IDataBufferer dataBufferer,
+            IConfiguration configuration)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _aiExecutor = aiExecutor ?? throw new ArgumentNullException(nameof(aiExecutor));
             _modelRepository = modelRepository ?? throw new ArgumentNullException(nameof(modelRepository));
-            _dataBufferer = dataBufferer ?? throw new ArgumentNullException(nameof(dataBufferer));
             _dataTransmissionService = dataTransmissionService ?? throw new ArgumentNullException(nameof(dataTransmissionService));
-            // _grpcClient = grpcClient;
-            _grpcClient = serviceProvider.GetService(typeof(IServerAppGrpcClient)) as IServerAppGrpcClient;
-
-            _loadedModels = new ConcurrentDictionary<string, Domain.Models.EdgeAiModel>();
+            _dataBufferer = dataBufferer ?? throw new ArgumentNullException(nameof(dataBufferer));
+            _defaultModelPath = configuration["EdgeAI:ModelPath"] ?? "models"; // Get from config
         }
 
-        public async Task<bool> LoadModelAsync(string modelName, string version)
+        public async Task LoadModelAsync(string modelName, string version)
         {
-            if (string.IsNullOrEmpty(modelName) || string.IsNullOrEmpty(version))
-            {
-                _logger.LogError("Model name or version cannot be empty.");
-                return false;
-            }
+            if (string.IsNullOrWhiteSpace(modelName)) throw new ArgumentNullException(nameof(modelName));
+            if (string.IsNullOrWhiteSpace(version)) version = "latest"; // Or handle as error
 
-            string modelKey = $"{modelName}:{version}";
-            if (_loadedModels.ContainsKey(modelKey) && _loadedModels[modelKey].IsLoaded)
-            {
-                _logger.LogInformation("Model {ModelKey} is already loaded.", modelKey);
-                return true;
-            }
-
+            _logger.LogInformation("Attempting to load AI model: {ModelName} version {Version}", modelName, version);
             try
             {
+                // IModelRepository.LoadModelFilePath was in instruction, but SDS had IModelRepository.LoadModelAsync returning EdgeAiModel
+                // The current IModelRepository.cs instruction has LoadModelFilePath, so we'll use that.
+                // This means IEdgeAiExecutor.LoadModel needs the file path.
+                
                 var modelMetadata = await _modelRepository.GetModelMetadata(modelName, version);
-                if (modelMetadata == null || string.IsNullOrEmpty(modelMetadata.FilePath))
+                if (modelMetadata == null)
                 {
-                    _logger.LogError("Metadata or file path not found for model {ModelKey}.", modelKey);
-                    // Attempt to download if gRPC client available
-                    if (_grpcClient != null) {
-                        _logger.LogInformation("Attempting to download model {ModelKey} from server.", modelKey);
-                        // This is a conceptual call, actual proto might differ
-                        var modelUpdate = await _grpcClient.GetModelAsync(modelName, version); 
-                        if (modelUpdate != null && modelUpdate.ModelBytes != null && modelUpdate.Metadata != null) {
-                            await HandleModelUpdateAsync(modelUpdate.Metadata, modelUpdate.ModelBytes);
-                            modelMetadata = await _modelRepository.GetModelMetadata(modelName, version); // try again
-                            if (modelMetadata == null || string.IsNullOrEmpty(modelMetadata.FilePath))
-                            {
-                                 _logger.LogError("Failed to load model {ModelKey} even after download attempt.", modelKey);
-                                 return false;
-                            }
-                        } else {
-                            _logger.LogError("Failed to download model {ModelKey} from server.", modelKey);
-                            return false;
-                        }
-                    } else {
-                        return false;
-                    }
+                    // Attempt to load from default path if metadata not found and path is in metadata
+                    // This logic might need refinement based on how models are discovered/registered.
+                    // For now, assume GetModelMetadata provides a valid path or one can be constructed.
+                    modelMetadata = new EdgeModelMetadataDto(
+                        modelName, 
+                        version, 
+                        modelName, 
+                        System.IO.Path.Combine(_defaultModelPath, modelName, version, $"{modelName}.onnx"), // Construct a plausible path
+                        DateTime.UtcNow, 
+                        new Dictionary<string, string>(), 
+                        new Dictionary<string, string>()
+                        );
+
+                    // If GetModelMetadata is meant to also check file existence or get it from a manifest,
+                    // then this fallback might not be needed, or GetModelMetadata should throw.
+                    // _logger.LogWarning("Metadata not found for model {ModelName} version {Version}. Attempting to construct path.", modelName, version);
+                }
+                
+                string modelFilePath = modelMetadata.FilePath;
+                if (string.IsNullOrEmpty(modelFilePath) || !System.IO.File.Exists(modelFilePath))
+                {
+                     modelFilePath = await _modelRepository.LoadModelFilePath(modelName, version); // Try this one too
+                     if (string.IsNullOrEmpty(modelFilePath) || !System.IO.File.Exists(modelFilePath))
+                     {
+                        _logger.LogError("Model file path not found or file does not exist for {ModelName} version {Version} at path: {ModelPath}", modelName, version, modelFilePath);
+                        return;
+                     }
                 }
 
-                string modelFilePath = Path.Combine(modelMetadata.FilePath); // Assuming FilePath is already full or relative to a known base
 
-                if (!File.Exists(modelFilePath))
-                {
-                    _logger.LogError("Model file does not exist at path: {ModelFilePath} for model {ModelKey}", modelFilePath, modelKey);
-                    return false;
-                }
-
-                await _aiExecutor.LoadModel(modelFilePath, modelName, version); // Pass name and version for executor to manage
-
-                var domainModel = new Domain.Models.EdgeAiModel
-                {
-                    Metadata = modelMetadata,
-                    FullFilePath = modelFilePath,
-                    IsLoaded = true
-                };
-                _loadedModels.AddOrUpdate(modelKey, domainModel, (k, o) => domainModel);
-
-                _logger.LogInformation("Successfully loaded AI model {ModelKey} from {ModelFilePath}", modelKey, modelFilePath);
-                return true;
+                await _aiExecutor.LoadModel(modelFilePath); // IEdgeAiExecutor.LoadModel expects file path
+                _loadedModelsMetadata[modelName] = modelMetadata; // Store metadata for the loaded model
+                _logger.LogInformation("Successfully loaded AI model: {ModelName} version {Version} from {ModelFilePath}", modelName, version, modelFilePath);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to load AI model {ModelKey}", modelKey);
-                var domainModel = new Domain.Models.EdgeAiModel { Metadata = new EdgeModelMetadataDto { ModelName = modelName, Version = version}, IsLoaded = false };
-                _loadedModels.AddOrUpdate(modelKey, domainModel, (k, o) => domainModel);
-                return false;
+                _logger.LogError(ex, "Failed to load AI model: {ModelName} version {Version}", modelName, version);
             }
         }
 
-        public async Task<EdgeModelOutputDto?> ExecuteModelAsync(string modelName, string version, EdgeModelInputDto input)
+        public async Task<EdgeModelOutputDto> ExecuteModelAsync(string modelName, EdgeModelInputDto input)
         {
-            if (string.IsNullOrEmpty(modelName) || string.IsNullOrEmpty(version))
-            {
-                _logger.LogError("Model name or version cannot be empty for execution.");
-                return null;
-            }
-             if (input == null)
-            {
-                _logger.LogError("Input DTO for model {ModelName}:{Version} cannot be null.", modelName, version);
-                return null;
-            }
+            if (string.IsNullOrWhiteSpace(modelName)) throw new ArgumentNullException(nameof(modelName));
+            if (input == null) throw new ArgumentNullException(nameof(input));
 
-            input.ModelName = modelName; // Ensure input DTO has model context if executor needs it
-            input.ModelVersion = version;
-
-            string modelKey = $"{modelName}:{version}";
-            if (!_loadedModels.TryGetValue(modelKey, out var modelInfo) || !modelInfo.IsLoaded)
+            if (!_loadedModelsMetadata.ContainsKey(modelName))
             {
-                _logger.LogWarning("Attempting to execute model {ModelKey} which is not loaded. Trying to load now...", modelKey);
-                bool loaded = await LoadModelAsync(modelName, version);
-                if (!loaded || !_loadedModels.TryGetValue(modelKey, out modelInfo) || !modelInfo.IsLoaded)
+                _logger.LogWarning("Model {ModelName} is not loaded. Attempting to load default version.", modelName);
+                await LoadModelAsync(modelName, "latest"); // Attempt to load if not already
+                if (!_loadedModelsMetadata.ContainsKey(modelName))
                 {
-                     _logger.LogError("Failed to load model {ModelKey} for execution.", modelKey);
-                    return null;
+                     _logger.LogError("ExecuteModelAsync failed: Model {ModelName} is not loaded and could not be loaded.", modelName);
+                    return new EdgeModelOutputDto(modelName, input.ModelVersion ?? "unknown", DateTime.UtcNow, new Dictionary<string, object>(), "Error: Model not loaded", new Dictionary<string, object>());
                 }
             }
 
+            _logger.LogDebug("Executing AI model: {ModelName} with input features count: {FeatureCount}", modelName, input.Features.Count);
             try
             {
-                _logger.LogDebug("Executing AI model {ModelKey} with input features: {FeatureKeys}", modelKey, string.Join(", ", input.Features.Keys));
-                var output = await _aiExecutor.Execute(modelName, version, input); // Executor uses name/version to find loaded session
+                var output = await _aiExecutor.Execute(modelName, input);
+                _logger.LogInformation("Successfully executed AI model: {ModelName}. Output result count: {ResultCount}", modelName, output.Results.Count);
 
-                if (output != null)
-                {
-                    _logger.LogInformation("Successfully executed AI model {ModelKey}. Output generated.", modelKey);
-                    // Optionally send output to server
-                    await _dataTransmissionService.SendEdgeAiOutputAsync(output);
-                }
-                else
-                {
-                    _logger.LogWarning("AI model {ModelKey} execution returned null output.", modelKey);
-                }
+                // Send output to server
+                await _dataTransmissionService.SendEdgeAiOutputAsync(output);
                 return output;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error executing AI model {ModelKey}", modelKey);
-                return new EdgeModelOutputDto { ModelName = modelName, ModelVersion = version, InferenceTimestamp = DateTime.UtcNow, Results = new Dictionary<string, object>(), Status = $"Error: {ex.Message}"};
+                _logger.LogError(ex, "Failed to execute AI model: {ModelName}", modelName);
+                return new EdgeModelOutputDto(modelName, input.ModelVersion ?? "unknown", DateTime.UtcNow, new Dictionary<string, object>(), $"Error: {ex.Message}", new Dictionary<string, object>());
             }
         }
 
         public async Task HandleModelUpdateAsync(EdgeModelMetadataDto metadata, byte[] modelBytes)
         {
-            if (metadata == null || string.IsNullOrEmpty(metadata.ModelName) || string.IsNullOrEmpty(metadata.Version))
-            {
-                _logger.LogError("Invalid metadata provided for model update.");
-                return;
-            }
-            if (modelBytes == null || modelBytes.Length == 0)
-            {
-                _logger.LogError("Model file bytes are null or empty for model {ModelName}:{Version}.", metadata.ModelName, metadata.Version);
-                return;
-            }
+            if (metadata == null) throw new ArgumentNullException(nameof(metadata));
+            if (modelBytes == null || modelBytes.Length == 0) throw new ArgumentNullException(nameof(modelBytes));
 
-            _logger.LogInformation("Handling model update for {ModelName}:{Version}.", metadata.ModelName, metadata.Version);
+            _logger.LogInformation("Handling AI model update for: {ModelName} version {Version}", metadata.ModelName, metadata.Version);
             try
             {
-                // Save the new model using IModelRepository
-                string savedPath = await _modelRepository.SaveModelAsync(metadata, modelBytes);
-                metadata.FilePath = savedPath; // Update metadata with the actual saved path
+                await _modelRepository.SaveModelAsync(metadata, modelBytes);
+                _logger.LogInformation("Model {ModelName} version {Version} saved to repository.", metadata.ModelName, metadata.Version);
 
-                _logger.LogInformation("New model version {ModelName}:{Version} saved to {FilePath}.", metadata.ModelName, metadata.Version, savedPath);
-
-                // Unload existing model if loaded
-                string modelKey = $"{metadata.ModelName}:{metadata.Version}";
-                if (_loadedModels.TryRemove(modelKey, out var oldModel) && oldModel.IsLoaded)
-                {
-                    //_aiExecutor.UnloadModel(oldModel.Metadata.ModelName, oldModel.Metadata.Version); // if executor supports unload
-                    _logger.LogInformation("Unloaded previous version of model {ModelKey} if it was active.", modelKey);
-                }
-                
-                // The model will be loaded on its next execution request, or explicitly if needed
-                _logger.LogInformation("Model {ModelKey} updated. It will be loaded on next use or by explicit call.", modelKey);
-                // Optionally, pre-load it: await LoadModelAsync(metadata.ModelName, metadata.Version);
-
+                // Now load the new model
+                await LoadModelAsync(metadata.ModelName, metadata.Version); // This will use the path from saved metadata or constructed
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to handle model update for {ModelName}:{Version}", metadata.ModelName, metadata.Version);
+                _logger.LogError(ex, "Failed to handle AI model update for: {ModelName} version {Version}", metadata.ModelName, metadata.Version);
             }
         }
 
-        public Task<EdgeModelStatusDto?> GetModelStatusAsync(string modelName, string version)
+        public Task<string> GetModelStatusAsync(string modelName)
         {
-            string modelKey = $"{modelName}:{version}";
-            if (_loadedModels.TryGetValue(modelKey, out var modelInfo))
+            if (_loadedModelsMetadata.TryGetValue(modelName, out var metadata))
             {
-                return Task.FromResult<EdgeModelStatusDto?>(new EdgeModelStatusDto
-                {
-                    ModelName = modelName,
-                    Version = version,
-                    IsLoaded = modelInfo.IsLoaded,
-                    FilePath = modelInfo.FullFilePath,
-                    LastLoadAttempt = modelInfo.Metadata?.DeploymentTimestamp ?? DateTime.MinValue // Example
-                });
+                // Could add more details like last execution time, error count etc.
+                return Task.FromResult($"Model '{modelName}' (Version: {metadata.Version}) is loaded. Path: {metadata.FilePath}");
             }
-            _logger.LogWarning("Status requested for model {ModelKey} which is not tracked.", modelKey);
-            return Task.FromResult<EdgeModelStatusDto?>(null);
+            return Task.FromResult($"Model '{modelName}' is not loaded.");
         }
     }
 }

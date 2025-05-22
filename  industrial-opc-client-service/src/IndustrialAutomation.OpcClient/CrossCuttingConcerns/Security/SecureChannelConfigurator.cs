@@ -1,14 +1,14 @@
 using Grpc.Net.Client;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Opc.Ua;
-using Opc.Ua.Configuration;
-using RabbitMQ.Client; // For RabbitMQ ConnectionFactory
-using Confluent.Kafka; // For Kafka ProducerConfig
+using RabbitMQ.Client;
+using Confluent.Kafka;
 using System;
 using System.IO;
 using System.Security.Cryptography.X509Certificates;
 using System.Net.Security;
+using Opc.Ua; // For Opc.Ua specific configurations
+using Opc.Ua.Configuration; // For ApplicationInstance
 using IndustrialAutomation.OpcClient.Application.DTOs.Common; // For ServerConnectionConfigDto
 
 namespace IndustrialAutomation.OpcClient.CrossCuttingConcerns.Security
@@ -24,237 +24,234 @@ namespace IndustrialAutomation.OpcClient.CrossCuttingConcerns.Security
             _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         }
 
-        public void ConfigureGrpcClient(GrpcChannelOptions options, string? clientCertPath = null, string? clientCertPassword = null, string? caCertPath = null)
+        public void ConfigureGrpcClient(GrpcChannelOptions options, string serverUrl)
         {
-            _logger.LogInformation("Configuring secure gRPC client channel.");
+            var useTls = _configuration.GetValue<bool>($"ServerApp:Grpc:UseTls", serverUrl.StartsWith("https://"));
+            if (!useTls)
+            {
+                _logger.LogWarning("gRPC TLS is disabled for {ServerUrl}. Communication will be insecure.", serverUrl);
+                return;
+            }
+
+            _logger.LogInformation("Configuring gRPC TLS for {ServerUrl}", serverUrl);
             var handler = new HttpClientHandler();
 
-            X509Certificate2? clientCertificate = null;
+            var clientCertPath = _configuration["ServerApp:Grpc:ClientCertificatePath"];
+            var clientCertPassword = _configuration["ServerApp:Grpc:ClientCertificatePassword"]; // If PFX has password
+
             if (!string.IsNullOrEmpty(clientCertPath))
             {
                 try
                 {
-                    clientCertificate = new X509Certificate2(clientCertPath, clientCertPassword);
-                    handler.ClientCertificates.Add(clientCertificate);
-                    _logger.LogInformation("Loaded client certificate for gRPC: {Subject}", clientCertificate.Subject);
+                    var clientCert = new X509Certificate2(clientCertPath, clientCertPassword);
+                    handler.ClientCertificates.Add(clientCert);
+                    _logger.LogInformation("Client certificate loaded for gRPC: {Subject}", clientCert.Subject);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Failed to load client certificate from path: {ClientCertPath}", clientCertPath);
+                    _logger.LogError(ex, "Failed to load gRPC client certificate from {Path}", clientCertPath);
                 }
             }
 
-            if (!string.IsNullOrEmpty(caCertPath))
+            var validateServerCert = _configuration.GetValue<bool>("ServerApp:Grpc:ValidateServerCertificate", true);
+            if (!validateServerCert)
             {
-                handler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) =>
-                {
-                    if (sslPolicyErrors == SslPolicyErrors.None) return true;
-
-                    try
-                    {
-                        X509Certificate2 ca = new X509Certificate2(caCertPath);
-                        X509Chain customChain = new X509Chain();
-                        customChain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-                        customChain.ChainPolicy.ExtraStore.Add(ca); // Add your CA to the chain's store
-
-                        if (cert != null)
-                        {
-                           customChain.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
-                           bool isValid = customChain.Build(new X509Certificate2(cert));
-                           if (isValid) {
-                               _logger.LogDebug("Server certificate validated successfully against custom CA for gRPC.");
-                               return true;
-                           }
-                           else {
-                                _logger.LogWarning("Server certificate validation failed against custom CA for gRPC. Chain status: {StatusInfo}", customChain.ChainStatus.FirstOrDefault().StatusInformation);
-                           }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Error during custom CA validation for gRPC server certificate.");
-                    }
-                    _logger.LogWarning("gRPC server certificate validation failed with SslPolicyErrors: {SslPolicyErrors}", sslPolicyErrors);
-                    return false; // Fail validation if custom CA check fails or errors occur
-                };
+                handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+                _logger.LogWarning("gRPC server certificate validation is DISABLED. This is insecure and for development only.");
             }
             else
             {
-                // Default behavior if no custom CA is provided: rely on system trust store.
-                // Log if server certificate validation fails.
-                 handler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) =>
+                var caCertPath = _configuration["ServerApp:Grpc:CaCertificatePath"];
+                if (!string.IsNullOrEmpty(caCertPath) && File.Exists(caCertPath))
                 {
-                    if (sslPolicyErrors == SslPolicyErrors.None) return true;
-                    _logger.LogWarning("gRPC server certificate validation failed (using system CA). SslPolicyErrors: {SslPolicyErrors}", sslPolicyErrors);
-                    if(cert != null) _logger.LogWarning("Server Cert Subject: {Subject}, Issuer: {Issuer}", cert.Subject, cert.Issuer);
-                    return false; // Or true if you want to allow self-signed for dev. BE CAREFUL.
-                };
-            }
+                     handler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) =>
+                     {
+                         if (sslPolicyErrors == SslPolicyErrors.None) return true;
 
+                         try
+                         {
+                             X509Chain customChain = new X509Chain();
+                             customChain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+                             customChain.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
+                             X509Certificate2 rootCa = new X509Certificate2(caCertPath);
+                             customChain.ChainPolicy.ExtraStore.Add(rootCa);
+                             
+                             if (cert != null && customChain.Build(new X509Certificate2(cert)))
+                             {
+                                 // Check if the chain's root is our trusted CA
+                                 var chainRoot = customChain.ChainElements[customChain.ChainElements.Count -1].Certificate;
+                                 if (chainRoot.Thumbprint == rootCa.Thumbprint)
+                                 {
+                                    _logger.LogInformation("Server certificate validated against custom CA: {Subject}", cert.Subject);
+                                    return true;
+                                 }
+                             }
+                             _logger.LogWarning("Server certificate {Subject} validation failed against custom CA. Errors: {SslPolicyErrors}", cert?.Subject, sslPolicyErrors);
+                             return false;
+                         }
+                         catch (Exception ex)
+                         {
+                             _logger.LogError(ex, "Exception during custom server certificate validation for gRPC.");
+                             return false;
+                         }
+                     };
+                    _logger.LogInformation("Custom CA certificate for gRPC server validation loaded from {Path}", caCertPath);
+                }
+            }
             options.HttpHandler = handler;
         }
 
-        public void ConfigureRabbitMqConnectionFactory(ConnectionFactory factory, string? clientCertPath = null, string? clientCertPassword = null, string? caCertPath = null, string? serverNameOverride = null)
+        public void ConfigureRabbitMqConnectionFactory(ConnectionFactory factory, string connectionName)
         {
-            _logger.LogInformation("Configuring secure RabbitMQ connection factory.");
-            if (factory.Uri != null && factory.Uri.Scheme.Equals("amqps", StringComparison.OrdinalIgnoreCase))
+            var useTls = _configuration.GetValue<bool>($"ServerApp:MessageQueue:RabbitMQ:{connectionName}:UseTls", factory.Uri?.Scheme.Equals("amqps", StringComparison.OrdinalIgnoreCase) ?? false);
+            if (!useTls)
             {
-                factory.Ssl.Enabled = true;
-                factory.Ssl.Version = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13;
-                factory.Ssl.AcceptablePolicyErrors = SslPolicyErrors.RemoteCertificateNameMismatch; // Allow if CN doesn't match hostname but cert is trusted
-
-                if (!string.IsNullOrEmpty(serverNameOverride)) {
-                    factory.Ssl.ServerName = serverNameOverride; // SNI
-                }
-
-
-                if (!string.IsNullOrEmpty(clientCertPath))
-                {
-                    factory.Ssl.CertPath = clientCertPath;
-                    if (!string.IsNullOrEmpty(clientCertPassword)) // Some SDKs might need password via different means
-                    {
-                        factory.Ssl.CertPassphrase = clientCertPassword;
-                    }
-                    _logger.LogInformation("Configured client certificate for RabbitMQ from path: {ClientCertPath}", clientCertPath);
-                }
-
-                if (!string.IsNullOrEmpty(caCertPath))
-                {
-                    factory.Ssl.CaCertPath = caCertPath; // Path to CA bundle
-                     _logger.LogInformation("Configured CA certificate for RabbitMQ from path: {CaCertPath}", caCertPath);
-                }
-                // Depending on RabbitMQ server config, might need to set Ssl.ServerName for SNI
+                 _logger.LogWarning("RabbitMQ TLS is disabled for connection {ConnectionName}. Communication will be insecure.", connectionName);
+                return;
             }
-        }
+            
+            _logger.LogInformation("Configuring RabbitMQ TLS for connection {ConnectionName}", connectionName);
+            factory.Ssl.Enabled = true;
+            factory.Ssl.ServerName = factory.Uri.Host; // Use the hostname from the URI for SNI
+            factory.Ssl.Version = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13;
 
-        public void ConfigureKafkaProducer(ClientConfig config, string? clientCertPath = null, string? clientKeyPath = null, string? caCertPath = null)
-        {
-             _logger.LogInformation("Configuring secure Kafka client.");
-            // Assumes broker address in config includes port and implies SSL if necessary, e.g., "myserver.com:9093"
-            // For Kafka, security protocol is often set directly, e.g., SecurityProtocol.Ssl
-            if (config.SecurityProtocol == SecurityProtocol.Ssl || 
-                config.SecurityProtocol == SecurityProtocol.SaslSsl)
+            var clientCertPath = _configuration[$"ServerApp:MessageQueue:RabbitMQ:{connectionName}:ClientCertificatePath"];
+            var clientCertPass = _configuration[$"ServerApp:MessageQueue:RabbitMQ:{connectionName}:ClientCertificatePassword"];
+            if (!string.IsNullOrEmpty(clientCertPath))
             {
-                 _logger.LogInformation("Kafka security protocol set to SSL/SASL_SSL.");
-                if (!string.IsNullOrEmpty(caCertPath))
-                {
-                    config.SslCaLocation = caCertPath;
-                     _logger.LogInformation("Configured Kafka SSL CA location: {SslCaLocation}", caCertPath);
-                }
-                if (!string.IsNullOrEmpty(clientCertPath))
-                {
-                    config.SslCertificateLocation = clientCertPath;
-                    _logger.LogInformation("Configured Kafka SSL certificate location: {SslCertificateLocation}", clientCertPath);
-
-                }
-                 if (!string.IsNullOrEmpty(clientKeyPath))
-                {
-                    config.SslKeyLocation = clientKeyPath; // Client private key
-                    // config.SslKeyPassword = clientKeyPassword; // If key is password protected
-                     _logger.LogInformation("Configured Kafka SSL key location: {SslKeyLocation}", clientKeyPath);
-                }
-                // Other SSL settings: SslCipherSuites, SslEndpointIdentificationAlgorithm, etc.
-                // config.SslEndpointIdentificationAlgorithm = "https"; // Enable hostname verification
+                factory.Ssl.CertPath = clientCertPath;
+                factory.Ssl.CertPassphrase = clientCertPass;
+                 _logger.LogInformation("Client certificate configured for RabbitMQ connection {ConnectionName}", connectionName);
             }
-        }
 
-        public async Task<ApplicationConfiguration> ConfigureOpcUaApplicationAsync(ServerConnectionConfigDto connectionConfig, string applicationName = "IndustrialOpcClient")
-        {
-            _logger.LogInformation("Configuring OPC UA application: {ApplicationName}", applicationName);
-
-            var config = new ApplicationConfiguration()
+            var validateServerCert = _configuration.GetValue<bool>($"ServerApp:MessageQueue:RabbitMQ:{connectionName}:ValidateServerCertificate", true);
+            if (!validateServerCert)
             {
-                ApplicationName = applicationName,
-                ApplicationUri = Utils.Format(@"urn:{0}:{1}", System.Net.Dns.GetHostName(), applicationName),
-                ApplicationType = ApplicationType.Client,
-                SecurityConfiguration = new SecurityConfiguration
-                {
-                    ApplicationCertificate = new CertificateIdentifier(), // Filled below
-                    TrustedIssuerCertificates = new CertificateTrustList { StoreType = "Directory", StorePath = @"%CommonApplicationData%\OPC Foundation\CertificateStores\UA Certificate Authorities\certs" },
-                    TrustedPeerCertificates = new CertificateTrustList { StoreType = "Directory", StorePath = @"%CommonApplicationData%\OPC Foundation\CertificateStores\UA Applications\certs" },
-                    RejectedCertificateStore = new CertificateTrustList { StoreType = "Directory", StorePath = @"%CommonApplicationData%\OPC Foundation\CertificateStores\RejectedCertificates" },
-                    AutoAcceptUntrustedCertificates = connectionConfig.AutoAcceptUntrustedCertificates, // DANGEROUS for production
-                    RejectSHA1SignedCertificates = true, // Good practice
-                    MinimumCertificateKeySize = 2048 // Good practice
-                },
-                TransportConfigurations = new TransportConfigurationCollection(),
-                TransportQuotas = new TransportQuotas { OperationTimeout = 120000 }, // 2 minutes
-                ClientConfiguration = new ClientConfiguration { DefaultSessionTimeout = 60000 }, // 1 minute
-                TraceConfiguration = new TraceConfiguration() // Enable tracing if needed
-            };
-
-            // Ensure store paths exist
-            Directory.CreateDirectory(Path.GetFullPath(config.SecurityConfiguration.TrustedIssuerCertificates.StorePath!));
-            Directory.CreateDirectory(Path.GetFullPath(config.SecurityConfiguration.TrustedPeerCertificates.StorePath!));
-            Directory.CreateDirectory(Path.GetFullPath(config.SecurityConfiguration.RejectedCertificateStore.StorePath!));
-
-
-            // Configure application certificate
-            if (!string.IsNullOrEmpty(connectionConfig.ClientCertificatePath) && !string.IsNullOrEmpty(connectionConfig.ClientPrivateKeyPath))
-            {
-                 _logger.LogInformation("Attempting to load OPC UA client certificate from PFX/PEM: {ClientCertificatePath}", connectionConfig.ClientCertificatePath);
-                // This is complex. OPC UA SDK usually handles creation or expects a PFX/DER in specific store.
-                // If providing path to PFX:
-                // config.SecurityConfiguration.ApplicationCertificate.StoreType = CertificateStoreType.X509Store;
-                // config.SecurityConfiguration.ApplicationCertificate.StorePath = "CurrentUser\\My"; // Example store
-                // config.SecurityConfiguration.ApplicationCertificate.SubjectName = "CN=MyClientCertName"; // Or Thumbprint
-                // OR load from file and put into store, then reference by thumbprint.
-                // For now, let's assume a certificate will be created or found by SDK if not explicitly configured via store/thumbprint.
-                // If using a specific file:
-                 config.SecurityConfiguration.ApplicationCertificate.StoreType = "X509File";
-                 config.SecurityConfiguration.ApplicationCertificate.StorePath = connectionConfig.ClientCertificatePath;
-                 // Password for PFX might be needed if not automatically handled by SDK or if private key is separate
-                 // config.SecurityConfiguration.ApplicationCertificate.PrivateKeyPassword = connectionConfig.Password; // if PFX password
-                 _logger.LogInformation("OPC UA client certificate configured from file path: {ClientCertificatePath}", connectionConfig.ClientCertificatePath);
-            }
-            else if (!string.IsNullOrEmpty(connectionConfig.ClientCertificateThumbprint))
-            {
-                 _logger.LogInformation("Using OPC UA client certificate by thumbprint: {ClientCertificateThumbprint}", connectionConfig.ClientCertificateThumbprint);
-                config.SecurityConfiguration.ApplicationCertificate.StoreType = CertificateStoreType.X509Store;
-                // Common stores: "CurrentUser\\My", "LocalMachine\\My"
-                config.SecurityConfiguration.ApplicationCertificate.StorePath = _configuration.GetValue<string>("OpcUa:ClientCertificate:StorePath", "CurrentUser\\My");
-                config.SecurityConfiguration.ApplicationCertificate.Thumbprint = connectionConfig.ClientCertificateThumbprint;
+                factory.Ssl.AcceptablePolicyErrors = SslPolicyErrors.RemoteCertificateChainErrors | SslPolicyErrors.RemoteCertificateNameMismatch | SslPolicyErrors.RemoteCertificateNotAvailable;
+                _logger.LogWarning("RabbitMQ server certificate validation is DISABLED for {ConnectionName}. This is insecure.", connectionName);
             }
             else
             {
-                _logger.LogInformation("No explicit OPC UA client certificate path or thumbprint provided. SDK will attempt to find/create one.");
-                // Standard SDK behavior: creates a self-signed cert if none found.
-                // Default path for SDK created certs: %CommonApplicationData%\OPC Foundation\CertificateStores\MachineDefault
-                config.SecurityConfiguration.ApplicationCertificate.StoreType = CertificateStoreType.Directory;
-                config.SecurityConfiguration.ApplicationCertificate.StorePath = @"%CommonApplicationData%\OPC Foundation\CertificateStores\MachineDefault";
-                config.SecurityConfiguration.ApplicationCertificate.SubjectName = config.ApplicationName; // SDK will create cert with this subject
+                // For custom CA, RabbitMQ.Client SslOption usually relies on the OS trust store.
+                // If specific CA pinning is needed, it's more complex and might involve custom validation callbacks if supported,
+                // or ensuring the CA is in the machine's trusted CA store.
+                 var caCertPath = _configuration[$"ServerApp:MessageQueue:RabbitMQ:{connectionName}:CaCertificatePath"];
+                 if (!string.IsNullOrEmpty(caCertPath))
+                 {
+                     // factory.Ssl.CaCertPath = caCertPath; // Not a direct property, typically handled by OS trust or explicit server validation hook
+                     _logger.LogInformation("For RabbitMQ custom CA validation using {CaCertPath}, ensure the CA certificate is in the system's trust store or handle validation explicitly if the library allows.", caCertPath);
+                 }
+            }
+        }
+
+        public void ConfigureKafkaProducer(ProducerConfig config, string connectionName)
+        {
+            var securityProtocol = _configuration[$"ServerApp:MessageQueue:Kafka:{connectionName}:SecurityProtocol"]; // e.g., "Ssl", "SaslSsl"
+            if (string.IsNullOrEmpty(securityProtocol) || securityProtocol.ToLower() == "plaintext")
+            {
+                _logger.LogWarning("Kafka security protocol is not SSL/TLS for {ConnectionName}. Communication may be insecure.", connectionName);
+                return;
             }
 
+            _logger.LogInformation("Configuring Kafka TLS for connection {ConnectionName} with protocol {SecurityProtocol}", connectionName, securityProtocol);
+            config.SecurityProtocol = (SecurityProtocol)Enum.Parse(typeof(SecurityProtocol), securityProtocol, true);
 
-            await config.Validate(ApplicationType.Client);
+            config.SslCaLocation = _configuration[$"ServerApp:MessageQueue:Kafka:{connectionName}:SslCaLocation"];
+            config.SslCertificateLocation = _configuration[$"ServerApp:MessageQueue:Kafka:{connectionName}:SslCertificateLocation"];
+            config.SslKeyLocation = _configuration[$"ServerApp:MessageQueue:Kafka:{connectionName}:SslKeyLocation"];
+            config.SslKeyPassword = _configuration[$"ServerApp:MessageQueue:Kafka:{connectionName}:SslKeyPassword"]; // For PKCS#12 or encrypted PEM keys
 
-            // Auto-accept server certificate if configured (dev only)
+            if (!string.IsNullOrEmpty(config.SslCaLocation))
+                _logger.LogInformation("Kafka SslCaLocation set for {ConnectionName}", connectionName);
+            if (!string.IsNullOrEmpty(config.SslCertificateLocation))
+                _logger.LogInformation("Kafka SslCertificateLocation (client cert) set for {ConnectionName}", connectionName);
+
+            // SASL configuration if protocol is SaslSsl
+            if (securityProtocol.ToLower().Contains("sasl"))
+            {
+                config.SaslMechanism = (SaslMechanism)Enum.Parse(typeof(SaslMechanism), _configuration[$"ServerApp:MessageQueue:Kafka:{connectionName}:SaslMechanism"], true); // e.g., Plain, ScramSha256, ScramSha512
+                config.SaslUsername = _configuration[$"ServerApp:MessageQueue:Kafka:{connectionName}:SaslUsername"];
+                config.SaslPassword = _configuration[$"ServerApp:MessageQueue:Kafka:{connectionName}:SaslPassword"];
+                _logger.LogInformation("Kafka SASL configured for {ConnectionName} with mechanism {SaslMechanism}", connectionName, config.SaslMechanism);
+            }
+        }
+
+        public async Task ConfigureOpcUaApplicationInstance(ApplicationInstance applicationInstance, ServerConnectionConfigDto? opcUaServerConfig = null)
+        {
+            var config = applicationInstance.ApplicationConfiguration;
+
+            // Load application configuration from embedded resource or file
+            // This creates a default PFX if one doesn't exist.
+            var pkiRootDir = _configuration.GetValue<string>("OpcClient:PkiPath", "%LocalApplicationData%/IndustrialAutomation.OpcClient/PKI");
+            pkiRootDir = Environment.ExpandEnvironmentVariables(pkiRootDir);
+            Directory.CreateDirectory(pkiRootDir); // Ensure PKI root directory exists
+
+            config.SecurityConfiguration = new SecurityConfiguration
+            {
+                ApplicationCertificate = new CertificateIdentifier
+                {
+                    StoreType = CertificateStoreType.Directory,
+                    StorePath = Path.Combine(pkiRootDir, "own"),
+                    SubjectName = $"CN={config.ApplicationName}, C=US, S=Arizona, O=YourCompany, DC={Utils.GetHostName()}" // Example subject name
+                },
+                TrustedIssuerCertificates = new CertificateTrustList
+                {
+                    StoreType = CertificateStoreType.Directory,
+                    StorePath = Path.Combine(pkiRootDir, "issuers")
+                },
+                TrustedPeerCertificates = new CertificateTrustList
+                {
+                    StoreType = CertificateStoreType.Directory,
+                    StorePath = Path.Combine(pkiRootDir, "trusted")
+                },
+                RejectedCertificateStore = new CertificateTrustList
+                {
+                    StoreType = CertificateStoreType.Directory,
+                    StorePath = Path.Combine(pkiRootDir, "rejected")
+                },
+                AutoAcceptUntrustedCertificates = opcUaServerConfig?.AutoAcceptUntrustedCertificates ?? _configuration.GetValue<bool>("OpcClient:AutoAcceptUntrustedCertificates", false),
+                RejectSHA1SignedCertificates = true, // Good practice
+                MinimumCertificateKeySize = 2048, // Good practice
+                AddAppCertToTrustedStore = true // Automatically trust its own certificate
+            };
+             _logger.LogInformation("OPC UA PKI Root directory set to: {PkiPath}", pkiRootDir);
+             _logger.LogInformation("OPC UA ApplicationCertificate StorePath: {StorePath}", config.SecurityConfiguration.ApplicationCertificate.StorePath);
+             _logger.LogInformation("OPC UA TrustedPeerCertificates StorePath: {StorePath}", config.SecurityConfiguration.TrustedPeerCertificates.StorePath);
+
+
             if (config.SecurityConfiguration.AutoAcceptUntrustedCertificates)
             {
-                config.CertificateValidator.CertificateValidation += (sender, e) =>
-                {
-                    if (e.Error.StatusCode == StatusCodes.BadCertificateUntrusted)
-                    {
-                        _logger.LogWarning("Auto-accepting untrusted OPC UA server certificate (DEV ONLY): {SubjectName}, Error: {Error}", e.Certificate.SubjectName, e.Error);
-                        e.Accept = true;
-                    }
-                };
+                _logger.LogWarning("OPC UA AutoAcceptUntrustedCertificates is ENABLED. This is insecure and recommended only for development/testing.");
             }
-             else // Implement proper validation or trust mechanism
+            
+            applicationInstance.ApplicationConfiguration.CertificateValidator.CertificateValidation += (validator, e) =>
             {
-                config.CertificateValidator.CertificateValidation += (sender, e) =>
+                if (e.Error.StatusCode == StatusCodes.BadCertificateUntrusted)
                 {
-                    if (e.Error.StatusCode != StatusCodes.Good)
+                    e.Accept = config.SecurityConfiguration.AutoAcceptUntrustedCertificates;
+                    if (e.Accept)
                     {
-                         _logger.LogWarning("OPC UA Server Certificate Validation Error: {Error}, Subject: {SubjectName}, Thumbprint: {Thumbprint}", e.Error, e.Certificate.SubjectName.Name, e.Certificate.Thumbprint);
+                        _logger.LogWarning("Accepted untrusted OPC UA certificate: {SubjectName} (Thumbprint: {Thumbprint}) due to AutoAcceptUntrustedCertificates setting.", e.Certificate.SubjectName, e.Certificate.Thumbprint);
                     }
-                    // If not auto-accepting, default behavior is to reject untrusted.
-                    // Custom logic here could check against a specific CA or list of trusted thumbprints if not using standard OPC UA trust lists.
-                    e.Accept = (e.Error.StatusCode == StatusCodes.Good); // Only accept if Good
-                };
-            }
+                    else
+                    {
+                        _logger.LogError("Rejected untrusted OPC UA certificate: {SubjectName} (Thumbprint: {Thumbprint}). Error: {Error}", e.Certificate.SubjectName, e.Certificate.Thumbprint, e.Error);
+                    }
+                }
+                else if (e.Error != ServiceResult.Good)
+                {
+                     _logger.LogError("OPC UA Certificate validation error for {SubjectName}: {Error}", e.Certificate.SubjectName, e.Error);
+                }
+            };
 
-            return config;
+            // Check the application certificate.
+            bool certOk = await applicationInstance.CheckApplicationInstanceCertificate(false, CertificateFactory.DefaultKeySize).ConfigureAwait(false);
+            if (!certOk)
+            {
+                _logger.LogError("OPC UA Application instance certificate is invalid!");
+                throw new Exception("OPC UA Application instance certificate is invalid!");
+            }
+             _logger.LogInformation("OPC UA Application instance certificate validated successfully: {SubjectName}", config.ApplicationCertificate.SubjectName);
         }
     }
 }

@@ -8,50 +8,37 @@ namespace IndustrialAutomation.OpcClient.Application.DTOs.Configuration
 {
     public record ClientConfigurationDto
     {
-        public string ClientId { get; set; } = string.Empty; // Modifiable by setter for initial load
-        public List<ServerConnectionConfigDto> ServerConnections { get; set; } = new List<ServerConnectionConfigDto>();
-        public List<TagDefinitionDto> TagDefinitions { get; set; } = new List<TagDefinitionDto>();
-        public List<UaSubscriptionConfigDto> UaSubscriptions { get; set; } = new List<UaSubscriptionConfigDto>();
-        public List<ValidationRule> ValidationRules { get; set; } = new List<ValidationRule>();
-        public List<WriteLimitPolicy> WriteLimitPolicies { get; set; } = new List<WriteLimitPolicy>();
-        public EdgeModelMetadataDto? ActiveEdgeModel { get; set; }
+        public string ClientId { get; init; } = Guid.NewGuid().ToString();
+        public List<ServerConnectionConfigDto> ServerConnections { get; init; } = new();
+        public List<TagDefinitionDto> TagDefinitions { get; init; } = new();
+        public List<UaSubscriptionConfigDto> UaSubscriptions { get; init; } = new();
+        public List<ValidationRule> ValidationRules { get; init; } = new();
+        public List<WriteLimitPolicy> WriteLimitPolicies { get; init; } = new();
+        public EdgeModelMetadataDto? ActiveEdgeModel { get; init; }
+        public Dictionary<string, string> GeneralSettings { get; init; } = new(); // For other generic settings
 
-        // For appsettings.json structure primarily, less for server push
-        public List<TagImportConfigDto>? TagImportConfigs { get; set; } // Loaded locally
-        public EdgeAiSettingsDto? EdgeAISettings { get; set; } // Loaded locally
-        public DataHandlingSettingsDto? DataHandlingSettings { get; set; } // Loaded locally
-        public ServerAppSettingsDto? ServerAppSettings { get; set; } // Loaded locally
+        // Default constructor for deserialization and initialization
+        public ClientConfigurationDto() { }
 
-    }
-
-    // Supporting DTOs for local configuration structure
-    public record EdgeAiSettingsDto
-    {
-        public string? ModelPath { get; init; }
-        public string? ActiveModel { get; init; }
-        public string? ActiveModelVersion { get; init; }
-        public int PredictionIntervalMs { get; init; } = 5000;
-    }
-
-    public record DataHandlingSettingsDto
-    {
-        public int BufferCapacity { get; init; } = 10000;
-        public int TransmissionBatchSize { get; init; } = 100;
-    }
-
-    public record ServerAppSettingsDto
-    {
-        public string? CommunicationMethod { get; init; }
-        public string? GrpcEndpoint { get; init; }
-        public MessageQueueSettingsDto? MessageQueue { get; init; }
-    }
-
-    public record MessageQueueSettingsDto
-    {
-        public string? BrokerType { get; init; } // "RabbitMQ", "Kafka"
-        public string? ConnectionString { get; init; } // For RabbitMQ
-        public string? BrokerList { get; init; } // For Kafka
-        public Dictionary<string, string>? Topics { get; init; }
-        // Add security settings if needed (TLS paths, SASL etc.)
+        // Constructor for creating with initial values if needed
+        public ClientConfigurationDto(
+            string clientId,
+            List<ServerConnectionConfigDto>? serverConnections = null,
+            List<TagDefinitionDto>? tagDefinitions = null,
+            List<UaSubscriptionConfigDto>? uaSubscriptions = null,
+            List<ValidationRule>? validationRules = null,
+            List<WriteLimitPolicy>? writeLimitPolicies = null,
+            EdgeModelMetadataDto? activeEdgeModel = null,
+            Dictionary<string, string>? generalSettings = null)
+        {
+            ClientId = clientId;
+            ServerConnections = serverConnections ?? new List<ServerConnectionConfigDto>();
+            TagDefinitions = tagDefinitions ?? new List<TagDefinitionDto>();
+            UaSubscriptions = uaSubscriptions ?? new List<UaSubscriptionConfigDto>();
+            ValidationRules = validationRules ?? new List<ValidationRule>();
+            WriteLimitPolicies = writeLimitPolicies ?? new List<WriteLimitPolicy>();
+            ActiveEdgeModel = activeEdgeModel;
+            GeneralSettings = generalSettings ?? new Dictionary<string, string>();
+        }
     }
 }
