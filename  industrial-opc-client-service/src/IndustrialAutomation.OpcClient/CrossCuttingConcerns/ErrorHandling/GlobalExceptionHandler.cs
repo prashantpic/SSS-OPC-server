@@ -2,61 +2,69 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Threading.Tasks;
 
-namespace IndustrialAutomation.OpcClient.CrossCuttingConcerns.ErrorHandling
+namespace IndustrialAutomation.OpcClient.CrossCuttingConcerns.ErrorHandling;
+
+/// <summary>
+/// Provides a centralized mechanism for catching and handling un-caught exceptions 
+/// that might occur during the service's operation, ensuring graceful error logging 
+/// and potential recovery attempts.
+/// </summary>
+public class GlobalExceptionHandler
 {
-    /// <summary>
-    /// Provides a centralized mechanism for catching and handling un-caught exceptions 
-    /// that might occur during the service's operation, ensuring graceful error logging 
-    /// and potential recovery attempts.
-    /// </summary>
-    public class GlobalExceptionHandler
+    private readonly ILogger<GlobalExceptionHandler> _logger;
+    // private readonly IDataTransmissionService _dataTransmissionService; // Optional: to send critical errors to server
+
+    public GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger /*, IDataTransmissionService dataTransmissionService = null */)
     {
-        private readonly ILogger<GlobalExceptionHandler> _logger;
-        // private readonly IDataTransmissionService _dataTransmissionService; // Optional: to send critical errors to server
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        // _dataTransmissionService = dataTransmissionService;
+    }
 
-        public GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger /*, IDataTransmissionService dataTransmissionService = null */)
-        {
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            // _dataTransmissionService = dataTransmissionService;
-        }
+    public void HandleUnhandledException(object sender, UnhandledExceptionEventArgs e)
+    {
+        var exception = e.ExceptionObject as Exception;
+        _logger.LogCritical(exception, "Unhandled exception caught. IsTerminating: {IsTerminating}", e.IsTerminating);
 
-        public void SetupGlobalExceptionHandling()
-        {
-            AppDomain.CurrentDomain.UnhandledException += (sender, args) =>
-            {
-                HandleException(args.ExceptionObject as Exception, "AppDomain.CurrentDomain.UnhandledException");
-                // Potentially decide if the process should terminate based on args.IsTerminating
-            };
+        // Optionally, try to send this critical error to the server application
+        // if (_dataTransmissionService != null && exception != null)
+        // {
+        //     var auditEvent = new AuditEventDto
+        //     {
+        //         ClientId = "Unknown", // Attempt to get ClientId if possible
+        //         Timestamp = DateTime.UtcNow,
+        //         EventType = "UnhandledException",
+        //         Source = "GlobalExceptionHandler",
+        //         Description = $"Unhandled exception: {exception.Message}",
+        //         Details = new Dictionary<string, string> { { "StackTrace", exception.StackTrace ?? "N/A" } }
+        //     };
+        //     _dataTransmissionService.SendAuditEventAsync(auditEvent).GetAwaiter().GetResult(); // Fire-and-forget or handle carefully
+        // }
 
-            TaskScheduler.UnobservedTaskException += (sender, args) =>
-            {
-                HandleException(args.Exception, "TaskScheduler.UnobservedTaskException");
-                args.SetObserved(); // Marks the exception as handled
-            };
-        }
+        // If the exception is terminating, there's not much more to do than log.
+        // If not terminating, consider if any specific recovery actions are feasible,
+        // but typically, an unhandled exception in a background service might still lead to instability.
+    }
 
-        public void HandleException(Exception? exception, string context)
-        {
-            if (exception == null)
-            {
-                _logger.LogError("GlobalExceptionHandler received a null exception object from context: {Context}.", context);
-                return;
-            }
+    public Task HandleTaskSchedulerUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+    {
+        _logger.LogCritical(e.Exception, "Unobserved task exception caught.");
+        e.SetObserved(); // Mark as observed to prevent process termination if possible
 
-            _logger.LogCritical(exception, "Unhandled exception caught in {Context}. Exception Type: {ExceptionType}, Message: {ExceptionMessage}",
-                context, exception.GetType().FullName, exception.Message);
+        // Similar optional reporting as above
+        return Task.CompletedTask;
+    }
 
-            // TODO: Add more sophisticated error handling logic:
-            // 1. Determine if the exception is fatal or recoverable.
-            // 2. Report critical errors to the server application via IDataTransmissionService if available and appropriate.
-            //    Example:
-            //    if (_dataTransmissionService != null)
-            //    {
-            //        var auditEvent = new AuditEventDto { ... error details ... };
-            //        _dataTransmissionService.SendAuditEventAsync(auditEvent).ConfigureAwait(false).GetAwaiter().GetResult(); // Fire and forget with caution
-            //    }
-            // 3. Implement graceful shutdown procedures for fatal errors.
-            // 4. For worker services, consider strategies to restart or indicate a failed state to an orchestrator.
-        }
+    public void Register()
+    {
+        AppDomain.CurrentDomain.UnhandledException += HandleUnhandledException;
+        TaskScheduler.UnobservedTaskException += HandleTaskSchedulerUnobservedTaskException;
+        _logger.LogInformation("Global exception handlers registered.");
+    }
+
+    public void Unregister()
+    {
+        AppDomain.CurrentDomain.UnhandledException -= HandleUnhandledException;
+        TaskScheduler.UnobservedTaskException -= HandleTaskSchedulerUnobservedTaskException;
+        _logger.LogInformation("Global exception handlers unregistered.");
     }
 }
