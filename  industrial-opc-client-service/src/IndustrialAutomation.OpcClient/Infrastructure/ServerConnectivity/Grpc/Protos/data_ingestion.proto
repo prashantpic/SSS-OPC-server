@@ -1,0 +1,142 @@
+syntax = "proto3";
+
+import "google/protobuf/struct.proto"; // For Value type
+import "google/protobuf/timestamp.proto";
+import "common.proto"; // Import common messages
+import "opc_client_management.proto"; // For OpcPointMessage, etc.
+
+option csharp_namespace = "IndustrialAutomation.OpcClient.Protos.Ingestion";
+
+package data_ingestion;
+
+// Service for ingesting data from OPC Clients
+service DataIngestion {
+    // Sends a batch of real-time data points
+    rpc SendRealtimeData (RealtimeDataBatchMessage) returns (common.StatusResponse);
+    // Sends a batch of historical data points
+    rpc SendHistoricalData (HistoricalDataBatchMessage) returns (common.StatusResponse);
+    // Sends a batch of alarm/event data
+    rpc SendAlarmEventData (AlarmEventBatchMessage) returns (common.StatusResponse);
+    // Sends a critical write log entry
+    rpc SendCriticalWriteLog (CriticalWriteLogMessage) returns (common.StatusResponse);
+    // Sends a generic audit event
+    rpc SendAuditEvent (AuditEventMessage) returns (common.StatusResponse);
+    // Sends an OPC UA subscription status update
+    rpc SendSubscriptionStatus (SubscriptionStatusMessage) returns (common.StatusResponse);
+    // Sends output from an edge AI model
+    rpc SendEdgeAiOutput (EdgeAiOutputMessage) returns (common.StatusResponse);
+
+    // Example of client-streaming RPC for high-throughput data
+    // rpc StreamRealtimeData (stream RealtimeDataBatchMessage) returns (common.StatusResponse);
+}
+
+
+// --- RealtimeDataBatch ---
+message RealtimeDataBatchMessage {
+    string client_id = 1;
+    google.protobuf.Timestamp batch_timestamp_utc = 2;
+    repeated opc_client_management.OpcPointMessage data_points = 3;
+}
+
+// --- HistoricalDataBatch ---
+message HistoricalDataBatchMessage {
+    string client_id = 1;
+    string query_id = 2;
+    string original_server_id = 3;
+    google.protobuf.Timestamp batch_timestamp_utc = 4;
+    repeated opc_client_management.OpcPointMessage historical_data_points = 5;
+    bool is_partial = 6;
+    bool is_complete = 7;
+}
+
+// --- AcAlarmEvent (mirrors AcAlarmEventDto) ---
+message AcAlarmEventMessage {
+    string server_id = 1;
+    string event_id = 2;
+    string source_name = 3;
+    string condition_name = 4;
+    string message = 5;
+    google.protobuf.Timestamp timestamp = 6;
+    google.protobuf.Timestamp active_time = 7;
+    string severity_text = 8; // Use string for flexibility, server can parse
+    int32 severity_value = 9;
+    string event_type = 10;
+    string category = 11;
+    bool is_acknowledged = 12;
+    bool is_confirmed = 13;
+    bool is_active = 14;
+    bool retain = 15;
+    string state = 16;
+    string acked_state = 17;
+    string confirmed_state = 18;
+    string active_state = 19;
+    string acknowledger_comment = 20;
+    string acknowledger_id = 21;
+    google.protobuf.Timestamp acknowledge_time = 22;
+    string comment = 23;
+    string client_user_id = 24;
+    map<string, google.protobuf.Value> extended_properties = 25;
+}
+
+// --- AlarmEventBatch ---
+message AlarmEventBatchMessage {
+    string client_id = 1;
+    google.protobuf.Timestamp batch_timestamp_utc = 2;
+    repeated AcAlarmEventMessage alarm_events = 3;
+}
+
+// --- CriticalWriteLog ---
+message CriticalWriteLogMessage {
+    string client_id = 1;
+    google.protobuf.Timestamp timestamp_utc = 2;
+    string server_id = 3;
+    string tag_id = 4;
+    string opc_address = 5;
+    google.protobuf.Value old_value = 6;
+    google.protobuf.Value new_value = 7;
+    string initiating_user = 8;
+    string context = 9;
+    bool success = 10;
+    string status_code = 11;
+    string error_message = 12;
+    string correlation_id = 13;
+}
+
+// --- AuditEvent ---
+message AuditEventMessage {
+    string client_id = 1;
+    google.protobuf.Timestamp timestamp_utc = 2;
+    string event_type = 3;
+    string source = 4;
+    string description = 5;
+    string user_id = 6;
+    map<string, string> details = 7;
+}
+
+// --- SubscriptionStatus ---
+message SubscriptionStatusMessage {
+    string client_id = 1;
+    string server_id = 2;
+    string subscription_id = 3;
+    google.protobuf.Timestamp timestamp_utc = 4;
+    string status = 5;
+    string last_error_message = 6;
+    int64 data_change_count = 7;
+    int64 publish_request_count = 8;
+    int64 notifications_count = 9;
+    int64 keep_alive_count = 10;
+    int32 monitored_item_count = 11;
+    double actual_publishing_interval = 12;
+}
+
+// --- EdgeAiOutput ---
+message EdgeAiOutputMessage {
+    string client_id = 1; // Added for context on server side
+    string model_name = 2;
+    string model_version = 3;
+    google.protobuf.Timestamp inference_timestamp_utc = 4;
+    map<string, google.protobuf.Value> results = 5;
+    string status = 6;
+    string error_message = 7;
+    map<string, google.protobuf.Value> metadata = 8;
+}

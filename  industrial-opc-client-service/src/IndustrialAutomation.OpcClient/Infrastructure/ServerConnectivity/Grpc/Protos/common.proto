@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+option csharp_namespace = "IndustrialAutomation.OpcClient.Protos.Common";
+
+package common;
+
+// Generic status response message
+message StatusResponse {
+    bool success = 1;
+    string message = 2;
+    int32 code = 3; // Optional: HTTP status code or custom error code
+}
+
+// Generic empty request message
+message EmptyRequest {}
+
+// Generic empty response message
+message EmptyResponse {}
+
+// Timestamp for Protobuf
+message Timestamp {
+    int64 seconds = 1;
+    int32 nanos = 2;
+}

@@ -1,0 +1,157 @@
+syntax = "proto3";
+
+import "google/protobuf/struct.proto"; // For Value type, allows arbitrary JSON-like objects
+import "google/protobuf/timestamp.proto";
+import "common.proto"; // Import common messages
+
+option csharp_namespace = "IndustrialAutomation.OpcClient.Protos.Management";
+
+package opc_client_management;
+
+// Service for managing OPC Client instances
+service ClientManagement {
+    // Requests the current configuration for a specific client
+    rpc GetConfiguration (GetConfigurationRequest) returns (ClientConfigurationResponse);
+    // Sends the client's health status to the server
+    rpc SendClientStatus (ClientHealthStatusMessage) returns (common.StatusResponse);
+    // Requests a specific AI model from the server
+    rpc GetModel (GetModelRequest) returns (ModelUpdateMessage);
+    // OPC Client reports its current full configuration (less common, usually server pushes)
+    // rpc ReportCurrentConfiguration (ClientConfigurationMessage) returns (common.StatusResponse);
+}
+
+// Request to get configuration
+message GetConfigurationRequest {
+    string client_id = 1;
+}
+
+// --- OpcPoint ---
+message OpcPointMessage {
+    string tag_id = 1;
+    google.protobuf.Value value = 2; // Can represent various data types
+    google.protobuf.Timestamp timestamp = 3;
+    string quality_status = 4;
+}
+
+// --- ServerConnectionConfig ---
+message ServerConnectionConfigMessage {
+    string server_id = 1;
+    string standard = 2; // e.g., "Ua", "Da"
+    string endpoint_url = 3;
+    string security_policy_uri = 4;
+    string message_security_mode = 5; // e.g., "SignAndEncrypt"
+    string user_identity_type = 6;
+    string username = 7;
+    string password = 8; // Consider security implications if sent over gRPC
+    string client_certificate_thumbprint = 9;
+    bool auto_accept_untrusted_certificates = 10;
+}
+
+// --- TagDefinition ---
+message TagDefinitionMessage {
+    string tag_id = 1;
+    string opc_address = 2;
+    string server_id = 3;
+    string opc_standard = 4;
+    string data_type = 5;
+    double scaling_factor = 6;
+    double offset = 7;
+    bool is_active = 8;
+    bool is_readable = 9;
+    bool is_writable = 10;
+    string description = 11;
+}
+
+// --- UaMonitoredItem ---
+message UaMonitoredItemMessage {
+    string client_tag_id = 1;
+    string node_id = 2;
+    double sampling_interval = 3;
+    string data_change_trigger = 4;
+    uint32 queue_size = 5;
+    bool discard_oldest = 6;
+    string monitoring_mode = 7; // e.g. "Reporting"
+}
+
+// --- UaSubscriptionConfig ---
+message UaSubscriptionConfigMessage {
+    string subscription_id = 1;
+    string server_id = 2;
+    double publishing_interval = 3;
+    uint32 lifetime_count = 4;
+    uint32 max_keep_alive_count = 5;
+    uint32 max_notifications_per_publish = 6;
+    bool publishing_enabled = 7;
+    uint32 priority = 8;
+    repeated UaMonitoredItemMessage monitored_items = 9;
+}
+
+// --- ValidationRule ---
+message ValidationRuleMessage {
+    string tag_id = 1;
+    string rule_type = 2; // e.g., "RangeCheck"
+    string parameter_json = 3; // JSON string for rule parameters
+    bool enabled = 4;
+}
+
+// --- WriteLimitPolicy ---
+message WriteLimitPolicyMessage {
+    string tag_id = 1;
+    bool rate_limiting_enabled = 2;
+    int32 max_writes_per_minute = 3;
+    bool value_change_threshold_enabled = 4;
+    double min_value_change_percentage = 5;
+    bool require_confirmation_below_threshold = 6;
+}
+
+// --- EdgeModelMetadata ---
+message EdgeModelMetadataMessage {
+    string model_name = 1;
+    string version = 2;
+    string file_path = 3; // Server might not need this, client manages local path
+    google.protobuf.Timestamp deployment_timestamp = 4;
+    map<string, string> input_schema = 5;
+    map<string, string> output_schema = 6;
+    string description = 7;
+    string framework = 8;
+    string checksum = 9;
+    string source_url = 10;
+}
+
+// Response containing client configuration
+message ClientConfigurationResponse {
+    string client_id = 1;
+    repeated ServerConnectionConfigMessage server_connections = 2;
+    repeated TagDefinitionMessage tag_definitions = 3;
+    repeated UaSubscriptionConfigMessage ua_subscriptions = 4;
+    repeated ValidationRuleMessage validation_rules = 5;
+    repeated WriteLimitPolicyMessage write_limit_policies = 6;
+    EdgeModelMetadataMessage active_edge_model = 7;
+    // Other config sections can be added here
+}
+
+// Message for client health status
+message ClientHealthStatusMessage {
+    string client_id = 1;
+    google.protobuf.Timestamp timestamp_utc = 2;
+    string overall_status = 3;
+    map<string, string> server_connection_statuses = 4;
+    map<string, string> subscription_statuses = 5;
+    int64 data_buffer_size = 6;
+    double cpu_load = 7;
+    double memory_usage = 8;
+    string last_error_message = 9;
+    map<string, string> component_details = 10;
+}
+
+// Request to get a model
+message GetModelRequest {
+    string model_name = 1;
+    string version = 2;
+}
+
+// Message for model update (metadata + bytes)
+message ModelUpdateMessage {
+    EdgeModelMetadataMessage metadata = 1;
+    bytes model_bytes = 2;
+}
