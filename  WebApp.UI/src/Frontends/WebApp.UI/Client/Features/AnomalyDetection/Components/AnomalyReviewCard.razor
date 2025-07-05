@@ -1,0 +1,102 @@
+@using Opc.System.UI.Client.Shared.Models
+@using Opc.System.UI.Client.Shared.Services.Api
+@using Opc.System.UI.Client.Shared.Services.Notification
+@using O.S.U.C.F.DataVisualization.Components // Alias to avoid ambiguity
+@using Microsoft.Extensions.Localization
+@inject IGatewayApiClient GatewayApi
+@inject INotificationService NotificationService
+@inject IStringLocalizer<AnomalyReviewCard> L
+
+<!--
+This component displays a single detected data anomaly, allowing users to review,
+label, and manage it. This facilitates the user feedback loop for improving the 
+anomaly detection model, as specified in REQ-UIX-014.
+-->
+<MudCard>
+    @if (Anomaly != null)
+    {
+        <MudCardHeader>
+            <CardHeaderContent>
+                <MudText Typo="Typo.h6">@L["Anomaly.Review.Title"]</MudText>
+                <MudText Typo="Typo.body2">@Anomaly.Timestamp.ToString("g")</MudText>
+            </CardHeaderContent>
+        </MudCardHeader>
+        <MudCardContent>
+            <MudText><strong>Tag:</strong> @Anomaly.TagName</MudText>
+            <MudText><strong>Value:</strong> @Anomaly.Value.ToString("F2")</MudText>
+            
+            <div class="mt-4">
+                <MudText Typo="Typo.caption">Data Context</MudText>
+                <O.S.U.C.F.DataVisualization.Components.HistoricalDataChart TagIds="@(new List<string> { Anomaly.TagName })" TimeRange="@_contextTimeRange" />
+            </div>
+
+        </MudCardContent>
+        <MudCardActions Class="d-flex align-center">
+            <MudSelect T="string" Label="@L["Anomaly.Review.LabelAs"]" @bind-Value="Anomaly.Label" Variant="Variant.Outlined" Dense="true" Margin="Margin.Dense">
+                <MudSelectItem Value="@("True Positive")">@L["Anomaly.Label.TruePositive"]</MudSelectItem>
+                <MudSelectItem Value="@("False Positive")">@L["Anomaly.Label.FalsePositive"]</MudSelectItem>
+            </MudSelect>
+             <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SubmitLabel" Disabled="@_isProcessing" Class="ml-2">
+                @if (_isProcessing)
+                {
+                    <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true" />
+                    <MudText Class="ms-2">Saving</MudText>
+                }
+                else
+                {
+                    @L["General.Save"]
+                }
+            </MudButton>
+        </MudCardActions>
+    }
+</MudCard>
+
+
+@code {
+    /// <summary>
+    /// The view model containing the details of the anomaly to be reviewed.
+    /// </summary>
+    [Parameter]
+    public AnomalyViewModel? Anomaly { get; set; }
+
+    private bool _isProcessing = false;
+    private DateTimeRange? _contextTimeRange;
+
+    protected override void OnParametersSet()
+    {
+        if (Anomaly != null)
+        {
+            // Set a time range around the anomaly to provide context in the chart.
+            _contextTimeRange = new DateTimeRange(
+                Anomaly.Timestamp.AddMinutes(-10),
+                Anomaly.Timestamp.AddMinutes(10)
+            );
+        }
+    }
+
+    private async Task SubmitLabel()
+    {
+        if (Anomaly == null || string.IsNullOrEmpty(Anomaly.Label))
+        {
+            NotificationService.ShowError("Please select a label before saving.");
+            return;
+        }
+
+        _isProcessing = true;
+        try
+        {
+            // In a real app, call the API
+            // await GatewayApi.LabelAnomalyAsync(Anomaly.Id, Anomaly.Label);
+            await Task.Delay(750); // Simulate API call
+            NotificationService.ShowSuccess($"Anomaly labeled as '{Anomaly.Label}'.");
+        }
+        catch (Exception ex)
+        {
+            NotificationService.ShowError($"Failed to save label: {ex.Message}");
+        }
+        finally
+        {
+            _isProcessing = false;
+        }
+    }
+}

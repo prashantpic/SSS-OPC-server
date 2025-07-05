@@ -1,0 +1,85 @@
+@using Opc.System.UI.Client.Shared.Models
+@using Opc.System.UI.Client.Shared.Services.Api
+@using Microsoft.Extensions.Localization
+@inject IDialogService DialogService
+@inject IGatewayApiClient GatewayApi
+@inject IStringLocalizer<TagConfiguration> L
+
+<MudText Typo="Typo.h5" GutterBottom="true">@L["Configuration.Tags.Title"]</MudText>
+
+<MudToolBar>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => OpenTagDialog(null))" StartIcon="@Icons.Material.Filled.Add">@L["Configuration.Tags.Add"]</MudButton>
+    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="OpenNamespaceBrowser" StartIcon="@Icons.Material.Filled.Search" Class="ml-2">@L["Configuration.Tags.BrowseServer"]</MudButton>
+    <MudSpacer />
+    <MudTextField T="string" Placeholder="Search" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0"></MudTextField>
+</MudToolBar>
+
+<MudDataGrid T="TagViewModel" ServerData="new Func<GridState<TagViewModel>, Task<GridData<TagViewModel>>>(ServerReload)"
+             Dense="true" Striped="true" Hover="true" @ref="_grid">
+    <Columns>
+        <PropertyColumn Property="x => x.NodeId" Title="Node ID" />
+        <PropertyColumn Property="x => x.DataType" Title="Data Type" />
+        <PropertyColumn Property="x => x.IsWritable" Title="Writable" />
+        <PropertyColumn Property="x => x.Description" Title="Description" />
+        <TemplateColumn Title="Actions" CellClass="d-flex justify-end">
+            <CellTemplate>
+                <MudIconButton Size="Size.Small" Icon="@Icons.Material.Filled.Edit" OnClick="@(() => OpenTagDialog(context.Item))" />
+                <MudIconButton Size="Size.Small" Icon="@Icons.Material.Filled.Delete" Color="Color.Error" OnClick="@(() => DeleteTag(context.Item))" />
+            </CellTemplate>
+        </TemplateColumn>
+    </Columns>
+    <PagerContent>
+        <MudDataGridPager T="TagViewModel" />
+    </PagerContent>
+</MudDataGrid>
+
+
+@code {
+    private MudDataGrid<TagViewModel>? _grid;
+    private List<TagViewModel> _tags = new();
+
+    protected override void OnInitialized()
+    {
+        // Mock data for demonstration. In a real app, this would be an empty list until ServerReload is called.
+        _tags.AddRange(new List<TagViewModel>
+        {
+            new TagViewModel { Id = Guid.NewGuid(), NodeId = "ns=2;s=Machine1.Temperature", DataType = "Double", IsWritable = false, Description = "Main temperature sensor" },
+            new TagViewModel { Id = Guid.NewGuid(), NodeId = "ns=2;s=Machine1.Pressure", DataType = "Float", IsWritable = false, Description = "Primary pressure reading" },
+            new TagViewModel { Id = Guid.NewGuid(), NodeId = "ns=2;s=Machine1.Setpoint", DataType = "Double", IsWritable = true, Description = "Operator temperature setpoint" }
+        });
+    }
+
+    private async Task<GridData<TagViewModel>> ServerReload(GridState<TagViewModel> state)
+    {
+        // This is where you would make an API call to GatewayApi.GetTagsAsync(state.Page, state.PageSize, ...)
+        // For now, we'll just return the mocked local data.
+        await Task.CompletedTask;
+        return new GridData<TagViewModel>() { TotalItems = _tags.Count, Items = _tags };
+    }
+
+    private async Task OpenTagDialog(TagViewModel? tag)
+    {
+        // Logic to open a dialog for adding/editing a tag
+    }
+
+    private async Task OpenNamespaceBrowser()
+    {
+        var parameters = new DialogParameters { ["ServerId"] = "mock-server-id" };
+        var dialog = DialogService.Show<NamespaceBrowser>(L["Configuration.Tags.BrowseServer"], parameters, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is List<TagViewModel> selectedTags)
+        {
+            // Logic to add the selected tags from the browser to the configuration
+            _tags.AddRange(selectedTags);
+            await _grid.ReloadServerData();
+        }
+    }
+
+    private async Task DeleteTag(TagViewModel tag)
+    {
+        // Logic to confirm and delete a tag via an API call
+        _tags.Remove(tag);
+        await _grid.ReloadServerData();
+    }
+}

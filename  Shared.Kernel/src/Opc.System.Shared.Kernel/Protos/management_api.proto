@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package opc.system.shared.kernel.protos;
+import "Protos/common.proto";
+
+option csharp_namespace = "Opc.System.Shared.Kernel.Protos.Management";
+
+// Service for managing OPC client instances remotely.
+service ManagementApiService {
+    // Retrieves the current health status of a specific client.
+    rpc GetClientStatus(GetClientStatusRequest) returns (ClientStatusResponse);
+    // Updates the configuration of a specific client.
+    rpc UpdateClientConfiguration(ClientConfiguration) returns (StatusResponse);
+}
+
+// Request to get a client's status.
+message GetClientStatusRequest {
+    GuidValue client_id = 1;
+}
+
+// Response containing a client's health and performance metrics.
+message ClientStatusResponse {
+    GuidValue client_id = 1;
+    string status = 2; // e.g., "Connected", "Disconnected", "Error"
+    int32 connected_servers = 3;
+    int64 total_tags_monitored = 4;
+    double cpu_usage_percent = 5;
+    double memory_usage_mb = 6;
+}
+
+// Represents the full configuration for an OPC client instance.
+message ClientConfiguration {
+    GuidValue client_id = 1;
+    string client_name = 2;
+    repeated OpcServerConfig servers = 3;
+}
+
+// Configuration for a single OPC server connection.
+message OpcServerConfig {
+    GuidValue server_id = 1;
+    string endpoint_url = 2;
+    // Further details like security policy can be added here.
+}

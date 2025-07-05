@@ -1,0 +1,31 @@
+sequenceDiagram
+    actor "OPC UA Server" as OpcUaServer
+    participant "Core OPC Client (Edge)" as REPOAPPCLIENT
+    participant "Message Queue" as REPOAPPMESSAGING
+    participant "Data Service" as REPOAPPDATA
+
+    activate REPOAPPCLIENT
+    REPOAPPCLIENT-OpcUaServer: 1. Read(TagID)
+    activate OpcUaServer
+    OpcUaServer--REPOAPPCLIENT: TagValue, Timestamp, Quality
+    deactivate OpcUaServer
+
+    REPOAPPCLIENT-REPOAPPCLIENT: 2. executeModel(TagValue)
+    REPOAPPCLIENT-REPOAPPCLIENT: 3. queueForSync(TagValue, PredictionResult)
+    note over REPOAPPCLIENT: The Core OPC Client operates autonomously. It continuously reads data, performs inference, and queues results locally. This allows it to function even during network outages.
+
+    alt 4. Check Network Connectivity
+        4.1 Network Disconnected
+    else 4.2 Network Connected
+        REPOAPPCLIENT-REPOAPPMESSAGING: 4.2.1 Publish({rawdata, airesult})
+        activate REPOAPPMESSAGING
+        note right of REPOAPPMESSAGING: Synchronization with the central server is asynchronous. The client publishes buffered data to the message queue when connectivity is restored, ensuring no data loss and decoupling the edge from the backend.
+        
+        REPOAPPMESSAGING-REPOAPPDATA: 4.2.2 DeliverMessage({rawdata, airesult})
+        deactivate REPOAPPMESSAGING
+        activate REPOAPPDATA
+        
+        REPOAPPDATA-REPOAPPDATA: 4.2.2.1 processIngestedData()
+        deactivate REPOAPPDATA
+    end
+    deactivate REPOAPPCLIENT

@@ -1,0 +1,91 @@
+# This is the central configuration file for the sss-opc-platform Helm chart.
+# Values defined here can be accessed globally by all sub-charts and can be used
+# to override the default values of each sub-chart for a specific deployment environment.
+
+# --- Global Values ---
+# These values are accessible to all sub-charts under `.Values.global.*`
+global:
+  # The container registry where your application images are stored.
+  # Example: "docker.io/my-org" or "123456789012.dkr.ecr.us-east-1.amazonaws.com"
+  imageRegistry: "your-registry.io/sss-opc-platform"
+
+  # The pull policy for all container images.
+  imagePullPolicy: IfNotPresent
+
+  # The main domain name for the platform. Sub-charts can use this to construct hostnames.
+  domainName: "sss-opc.prod.example.com"
+
+
+# --- Sub-chart Configurations ---
+# Each key below corresponds to a sub-chart name listed in Chart.yaml's dependencies.
+# This allows for centralized control over the configuration of each microservice.
+
+apiGateway:
+  # Number of replicas for the API Gateway deployment.
+  replicaCount: 2
+  # Tag for the container image. Overrides the sub-chart's default.
+  image:
+    tag: "1.0.0"
+  # Resource requests and limits for the API Gateway pods.
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+  # Ingress configuration for exposing the API Gateway externally.
+  ingress:
+    enabled: true
+    # Annotations for the ingress controller, e.g., for cert-manager.
+    annotations:
+      kubernetes.io/ingress.class: "nginx"
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # Hostnames to route to the API Gateway.
+    hosts:
+      - host: api.sss-opc.prod.example.com
+        paths:
+          - path: /
+            pathType: ImplementationSpecific
+    # TLS configuration for HTTPS.
+    tls:
+      - secretName: sss-opc-api-gateway-tls
+        hosts:
+          - api.sss-opc.prod.example.com
+
+authService:
+  replicaCount: 1
+  image:
+    tag: "1.0.0"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "300m"
+      memory: "256Mi"
+  # Ingress is likely not needed if it's only accessed via the API Gateway.
+  ingress:
+    enabled: false
+
+dataService:
+  replicaCount: 2
+  image:
+    tag: "1.0.0"
+  resources:
+    requests:
+      cpu: "150m"
+      memory: "256Mi"
+    limits:
+      cpu: "750m"
+      memory: "512Mi"
+  # Configuration for database connections.
+  # In a real deployment, these would point to Kubernetes secrets created by Terraform or another process.
+  database:
+    # Name of the Kubernetes secret containing the PostgreSQL connection string.
+    connectionStringSecretName: "rds-connection-details"
+    # Key within the secret that holds the connection string.
+    connectionStringSecretKey: "connectionString"
+  # Ingress is likely not needed if it's only accessed via the API Gateway.
+  ingress:
+    enabled: false

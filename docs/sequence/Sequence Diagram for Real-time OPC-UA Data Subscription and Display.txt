@@ -1,0 +1,57 @@
+sequenceDiagram
+    actor User as "User"
+    participant PresentationLayer as "Presentation Layer"
+    participant DataService as "Data Service"
+    participant MessagingInfrastructure as "Messaging Infrastructure"
+    participant CoreOpcClient as "Core OPC Client"
+    participant OpcUaServer as "OPC UA Server"
+
+    User-PresentationLayer: 1. Views dashboard requiring real-time data
+    activate PresentationLayer
+
+    PresentationLayer-DataService: 2. EstablishWebSocketConnection(tagList)
+    activate DataService
+    DataService--PresentationLayer: Connection Established
+
+    DataService-MessagingInfrastructure: 3. Publish(command: EnsureSubscription, payload: tagList)
+    note left of CoreOpcClient: This flow assumes the OPC Client is already running and connected to the Message Queue.
+    deactivate DataService
+
+    activate MessagingInfrastructure
+    MessagingInfrastructure-CoreOpcClient: 4. Consume(command: EnsureSubscription)
+    deactivate MessagingInfrastructure
+
+    activate CoreOpcClient
+    CoreOpcClient-CoreOpcClient: 4.1 Check if subscription already exists for tags
+
+    opt If new subscription is needed
+        note right of OpcUaServer: The check in 4.1 handles subscription reuse to avoid creating redundant subscriptions on the OPC UA Server.
+        CoreOpcClient-OpcUaServer: 5. CreateSubscription(subscriptionParams, monitoredItems)
+        activate OpcUaServer
+        OpcUaServer--CoreOpcClient: subscriptionId, revisedParams
+        deactivate OpcUaServer
+        CoreOpcClient-CoreOpcClient: 6. Store subscription state
+    end
+
+    loop For each data change
+        note over MessagingInfrastructure: Data flow from OPC UA Server to the User's UI is fully asynchronous, enabling high throughput and loose coupling.
+        OpcUaServer-CoreOpcClient: 7.1 DataChangeNotification(data)
+
+        CoreOpcClient-MessagingInfrastructure: 7.2 Publish(topic: opc.client.data.realtime, message: formattedData)
+        activate MessagingInfrastructure
+
+        MessagingInfrastructure-DataService: 8. Consume(message)
+        activate DataService
+        deactivate MessagingInfrastructure
+
+        DataService-DataService: 8.1 Persist data to Time-Series DB (IHistoricalDataRepository)
+
+        DataService-PresentationLayer: 9. PushDataToClient(data)
+        note right of DataService: Data is pushed to the UI via a persistent streaming connection, such as a WebSocket.
+        deactivate DataService
+
+        PresentationLayer--User: 10. UpdateDashboard(charts, gauges)
+    end
+
+    deactivate CoreOpcClient
+    deactivate PresentationLayer

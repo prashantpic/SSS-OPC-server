@@ -1,0 +1,100 @@
+@page "/alarms"
+@using ui.webapp.Models
+@using ui.webapp.ApiClient
+@using ui.webapp.Services
+
+@inject IAlarmApiClient AlarmApiClient
+@inject INotificationService NotificationService
+
+<PageTitle>Alarm Console</PageTitle>
+
+<MudText Typo="Typo.H4" GutterBottom="true">Alarm Console</PageTitle>
+
+<MudDataGrid T="AlarmDto"
+             @ref="_grid"
+             ServerData="@(new Func<GridState<AlarmDto>, Task<GridData<AlarmDto>>>(ServerReload))"
+             Dense="true"
+             Hover="true"
+             Striped="true">
+    <Columns>
+        <PropertyColumn Property="x => x.Severity" Title="Severity">
+            <CellTemplate>
+                <MudChip Label="true" Color="@GetSeverityColor(context.Item.Severity)" Size="Size.Small">@GetSeverityText(context.Item.Severity)</MudChip>
+            </CellTemplate>
+        </PropertyColumn>
+        <PropertyColumn Property="x => x.Timestamp" Title="Timestamp" Format="yyyy-MM-dd HH:mm:ss" />
+        <PropertyColumn Property="x => x.Source" Title="Source" />
+        <PropertyColumn Property="x => x.Message" Title="Message" />
+        <PropertyColumn Property="x => x.Status" Title="Status" />
+        <TemplateColumn Title="Actions">
+            <CellTemplate>
+                <MudButton Variant="Variant.Filled"
+                           Size="Size.Small"
+                           Color="Color.Primary"
+                           OnClick="@(() => OnAcknowledgeClicked(context.Item))"
+                           Disabled="@(context.Item.Status == "Acknowledged")">
+                    Acknowledge
+                </MudButton>
+            </CellTemplate>
+        </TemplateColumn>
+    </Columns>
+    <PagerContent>
+        <MudDataGridPager T="AlarmDto" />
+    </PagerContent>
+</MudDataGrid>
+
+
+@code {
+    private MudDataGrid<AlarmDto>? _grid;
+
+    private async Task<GridData<AlarmDto>> ServerReload(GridState<AlarmDto> state)
+    {
+        try
+        {
+            // The state object would be passed to the API to handle server-side paging, sorting, and filtering.
+            // For now, we simulate this.
+            PagedResult<AlarmDto> result = await AlarmApiClient.GetAlarmsAsync(state);
+            return new GridData<AlarmDto>()
+            {
+                Items = result.Items,
+                TotalItems = result.TotalItems
+            };
+        }
+        catch (Exception ex)
+        {
+            NotificationService.ShowError($"Failed to load alarms: {ex.Message}");
+            return new GridData<AlarmDto>() { Items = new List<AlarmDto>(), TotalItems = 0 };
+        }
+    }
+
+    private async Task OnAcknowledgeClicked(AlarmDto alarm)
+    {
+        try
+        {
+            var request = new AcknowledgeAlarmDto { AlarmId = alarm.AlarmId };
+            await AlarmApiClient.AcknowledgeAlarmAsync(request);
+            NotificationService.ShowSuccess($"Alarm '{alarm.Message}' acknowledged.");
+            await _grid!.ReloadServerData();
+        }
+        catch (Exception ex)
+        {
+            NotificationService.ShowError($"Failed to acknowledge alarm: {ex.Message}");
+        }
+    }
+
+    private Color GetSeverityColor(int severity) => severity switch
+    {
+        >= 1000 => Color.Error,
+        >= 700 => Color.Warning,
+        >= 400 => Color.Info,
+        _ => Color.Default
+    };
+    
+    private string GetSeverityText(int severity) => severity switch
+    {
+        >= 1000 => "Critical",
+        >= 700 => "High",
+        >= 400 => "Medium",
+        _ => "Low"
+    };
+}

@@ -1,0 +1,47 @@
+sequenceDiagram
+    actor "Core OPC Client" as REPOAPPCLIENT
+    participant "Message Queue" as REPOAPPMESSAGING
+    participant "AI Service" as REPOAPPAI
+    participant "Data Service" as REPOAPPDATA
+    participant "Notification Service" as REPOAPPNOTIFICATION
+
+    loop Continuous Real-Time Data Stream
+        REPOAPPCLIENT-REPOAPPMESSAGING: 1.1 Publish(RealtimeDataBatch)
+        note over REPOAPPCLIENT: Core OPC Client continuously receives data from physical devices via OPC UA subscriptions, which triggers this processing loop.
+        activate REPOAPPMESSAGING
+        
+        REPOAPPMESSAGING-REPOAPPAI: 1.2 Consume(RealtimeDataBatch)
+        deactivate REPOAPPMESSAGING
+        activate REPOAPPAI
+        
+        REPOAPPAI-REPOAPPAI: 1.2.1 Process Data & Execute Model
+        note right of REPOAPPAI: Anomaly detection model (e.g., ONNX format) is loaded and executed. Model execution is synchronous internally.
+        REPOAPPAI--REPOAPPAI: PredictionResult
+        
+        alt [Anomaly Detected in PredictionResult]
+            REPOAPPAI-REPOAPPDATA: 1.3.1 StoreAnomalyRecord(details)
+            activate REPOAPPDATA
+            REPOAPPDATA--REPOAPPAI: anomalyRecordId
+            deactivate REPOAPPDATA
+            
+            REPOAPPAI-REPOAPPMESSAGING: 1.3.2 Publish(AnomalyDetectedEvent)
+            activate REPOAPPMESSAGING
+            
+            REPOAPPMESSAGING-REPOAPPNOTIFICATION: 1.3.3 Consume(AnomalyDetectedEvent)
+            deactivate REPOAPPMESSAGING
+            activate REPOAPPNOTIFICATION
+            
+            REPOAPPNOTIFICATION-REPOAPPDATA: 1.3.3.1 GetNotificationPolicyAndContacts()
+            activate REPOAPPDATA
+            REPOAPPDATA--REPOAPPNOTIFICATION: ContactList
+            deactivate REPOAPPDATA
+            
+            REPOAPPNOTIFICATION-REPOAPPNOTIFICATION: 1.3.3.2 DispatchAlerts(ContactList, Event)
+            note right of REPOAPPNOTIFICATION: Alert dispatch involves calls to external gateways like SMTP for email or Twilio for SMS.
+            REPOAPPNOTIFICATION--REPOAPPNOTIFICATION: DispatchStatus
+            
+            deactivate REPOAPPNOTIFICATION
+        end
+        
+        deactivate REPOAPPAI
+    end

@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package opc.system.shared.kernel.protos;
+
+option csharp_namespace = "Opc.System.Shared.Kernel.Protos.Common";
+
+// A wrapper for a standard GUID/UUID, represented as a string.
+message GuidValue {
+    string value = 1;
+}
+
+// Represents a request for a paginated list of resources.
+message PagedRequest {
+    int32 page_number = 1;
+    int32 page_size = 2;
+}
+
+// A standard response message indicating the status of an operation.
+message StatusResponse {
+    bool success = 1;
+    string error_message = 2;
+}

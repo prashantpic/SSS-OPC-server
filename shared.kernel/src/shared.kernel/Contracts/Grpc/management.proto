@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package Contracts.Grpc;
+
+// Service for managing OPC Client instances and configurations.
+service ManagementService {
+  // Retrieves the configuration for a specific OPC client.
+  rpc GetClientConfiguration(ClientConfigurationRequest) returns (ClientConfigurationResponse);
+  // Updates the configuration for a specific OPC client.
+  rpc UpdateClientConfiguration(UpdateClientConfigurationRequest) returns (google.protobuf.Empty);
+  // Retrieves the current operational status of a client.
+  rpc GetClientStatus(ClientStatusRequest) returns (ClientStatusResponse);
+}
+
+// ---- Message Definitions ----
+
+message ClientConfigurationRequest {
+  string client_id = 1; // UUID of the client
+}
+
+message ClientConfigurationResponse {
+  ClientConfiguration configuration = 1;
+}
+
+message UpdateClientConfigurationRequest {
+  string client_id = 1; // UUID of the client
+  ClientConfiguration configuration = 2;
+}
+
+message ClientStatusRequest {
+  string client_id = 1; // UUID of the client
+}
+
+message ClientStatusResponse {
+  string client_id = 1;
+  string status = 2; // e.g., "Connected", "Disconnected", "Error"
+  int64 connected_since_ticks = 3;
+  int32 subscription_count = 4;
+}
+
+message ClientConfiguration {
+  string id = 1;
+  string name = 2;
+  string endpoint_url = 3;
+  string security_policy = 4;
+  bool is_active = 5;
+}

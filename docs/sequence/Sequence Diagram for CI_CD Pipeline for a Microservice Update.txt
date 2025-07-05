@@ -1,0 +1,77 @@
+sequenceDiagram
+    actor Developer
+    participant REPOAPPREPORTING as "Reporting Service Git Repo"
+    participant opscicdpipelines as "CI/CD Server"
+    participant CICDPipelineAgent as "CI/CD Pipeline Agent"
+    participant opsiackubernetes as "IaC Git Repo"
+    participant ContainerRegistry
+    participant KubernetesCluster
+
+    Developer-REPOAPPREPORTING: 1. git push --set-upstream origin feature/new-report
+    activate REPOAPPREPORTING
+    REPOAPPREPORTING--Developer: Push successful
+    deactivate REPOAPPREPORTING
+
+    note over REPOAPPREPORTING: A Webhook configured in the Git repository provider triggers the pipeline upon a push to a specified branch.
+    REPOAPPREPORTING-opscicdpipelines: 2. Webhook Trigger (Code Pushed)
+    activate opscicdpipelines
+
+    opscicdpipelines-CICDPipelineAgent: 3. Start CI Job
+    activate CICDPipelineAgent
+    note right of CICDPipelineAgent: The agent checks out the application code and the infrastructure code (which contains the Dockerfile) to have all necessary build artifacts.
+    CICDPipelineAgent-REPOAPPREPORTING: 3.1. git clone/pull
+    activate REPOAPPREPORTING
+    REPOAPPREPORTING--CICDPipelineAgent: Source Code
+    deactivate REPOAPPREPORTING
+    CICDPipelineAgent-opsiackubernetes: 3.2. git clone/pull
+    activate opsiackubernetes
+    opsiackubernetes--CICDPipelineAgent: Dockerfile & K8s Manifests
+    deactivate opsiackubernetes
+
+    loop 4. Build and Test Application
+        CICDPipelineAgent-CICDPipelineAgent: 4.1. dotnet restore
+        CICDPipelineAgent-CICDPipelineAgent: 4.2. dotnet build
+        CICDPipelineAgent-CICDPipelineAgent: 4.3. dotnet test --logger trx
+    end
+
+    alt 5. Evaluate Test Results
+        CICDPipelineAgent-CICDPipelineAgent: 5.1. [Tests Pass]
+        CICDPipelineAgent-ContainerRegistry: 5.1.1. Build & Push Docker Image
+        activate ContainerRegistry
+        CICDPipelineAgent-CICDPipelineAgent: 5.1.1.1. docker build -f ./iac/Dockerfile -t registry/reporting-svc:v1.2.3 .
+        CICDPipelineAgent-ContainerRegistry: 5.1.1.2. docker push registry/reporting-svc:v1.2.3
+        ContainerRegistry--CICDPipelineAgent: Push successful
+        deactivate ContainerRegistry
+        CICDPipelineAgent-opscicdpipelines: 5.1.2. Report CI Stage Success
+    else 5.2. [Tests Fail]
+        CICDPipelineAgent-opscicdpipelines: 5.2.1. Report Failure Status
+        opscicdpipelines-Developer: 5.2.2. Notify: Build Failed
+    end
+
+    note over opscicdpipelines: This stage is configurable and can be omitted for fully automated CD to development/staging environments.
+    opt 6. Deployment Gate: Manual Approval
+        Developer-opscicdpipelines: 6.1. Approve Deployment
+        opscicdpipelines--Developer: Approval Acknowledged
+    end
+
+    opscicdpipelines-CICDPipelineAgent: 7. Start CD Job
+
+    CICDPipelineAgent-KubernetesCluster: 8. Update Kubernetes Deployment
+    activate KubernetesCluster
+    CICDPipelineAgent-CICDPipelineAgent: 8.1. Update image tag in deployment.yaml
+    CICDPipelineAgent-KubernetesCluster: 8.2. kubectl apply -f ./iac/k8s/deployment.yaml
+    KubernetesCluster--CICDPipelineAgent: deployment.apps/reporting-svc configured
+
+    note over KubernetesCluster: Kubernetes' native rolling update strategy ensures zero-downtime deployments. A rollback can be triggered via kubectl rollout undo if issues are detected.
+    loop 9. Perform Rolling Update
+        KubernetesCluster-KubernetesCluster: 9.1. Start new Pod with image v1.2.3
+        KubernetesCluster-KubernetesCluster: 9.2. Wait for new Pod to be Ready (Health Check Pass)
+        KubernetesCluster-KubernetesCluster: 9.3. Terminate old Pod
+    end
+    deactivate KubernetesCluster
+
+    CICDPipelineAgent-opscicdpipelines: 10. Report CD Stage Success
+    deactivate CICDPipelineAgent
+
+    opscicdpipelines-Developer: 11. Notify: Deployment Successful
+    deactivate opscicdpipelines

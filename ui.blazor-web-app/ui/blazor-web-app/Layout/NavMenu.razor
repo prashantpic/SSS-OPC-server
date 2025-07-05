@@ -1,0 +1,28 @@
+@using ui.webapp.Services
+@inject ILocalizationService L
+
+<MudNavMenu>
+    <MudNavLink Href="/dashboards" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Dashboard">
+        @L["Nav.Dashboards"]
+    </MudNavLink>
+
+    <MudNavGroup Title="@L["Nav.Alarms"]" Icon="@Icons.Material.Filled.Alarm" Expanded="false">
+        <MudNavLink Href="/alarms" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.NotificationsActive">
+            @L["Nav.AlarmConsole"]
+        </MudNavLink>
+    </MudNavGroup>
+
+    <AuthorizeView Roles="Administrator">
+        <Authorized>
+            <MudNavGroup Title="@L["Nav.Management"]" Icon="@Icons.Material.Filled.Devices" Expanded="false">
+                <MudNavLink Href="/management/clients" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Router">
+                    @L["Nav.ClientInstances"]
+                </MudNavLink>
+            </MudNavGroup>
+
+            <MudNavGroup Title="@L["Nav.Configuration"]" Icon="@Icons.Material.Filled.Build" Expanded="false">
+                @* Add configuration links here *@
+            </MudNavGroup>
+        </Authorized>
+    </AuthorizeView>
+</MudNavMenu>

@@ -1,0 +1,116 @@
+@using Opc.System.UI.Client.Shared.Models
+@using Microsoft.Extensions.Localization
+@inject IGatewayApiClient GatewayApi
+@inject INotificationService NotificationService
+@inject IStringLocalizer<ReportTemplateEditor> L
+
+<!--
+This is a complex component that provides an interface for users to create and customize 
+report templates, including data sources, KPIs, chart types, and branding, as per REQ-UIX-017.
+-->
+
+<MudCard>
+    <MudForm Model="@Template" OnValidSubmit="SaveTemplate">
+        <MudCardHeader>
+            <CardHeaderContent>
+                <MudText Typo="Typo.h5">@L["Reports.TemplateEditor.Title"]</MudText>
+            </CardHeaderContent>
+        </MudCardHeader>
+        <MudCardContent>
+            @if(Template != null)
+            {
+                <MudTextField T="string" Label="Template Name" @bind-Value="Template.Name" Required="true" RequiredError="Template name is required." />
+
+                <MudTabs Elevation="2" Rounded="true" PanelClass="mt-4">
+                    <MudTabPanel Text="@L["Reports.Tabs.DataSources"]" Icon="@Icons.Material.Filled.Source">
+                        <MudText>Component for selecting tags and defining aggregations will be placed here.</MudText>
+                        <MudText Typo="Typo.body2" Class="mt-4">For example, a multi-select tree view or a data grid could be used to pick tags.</MudText>
+                    </MudTabPanel>
+                    <MudTabPanel Text="@L["Reports.Tabs.Visualizations"]" Icon="@Icons.Material.Filled.BarChart">
+                        <MudText>Drag-and-drop interface or form-based builder for charts, tables, and KPIs will be placed here.</MudText>
+                    </MudTabPanel>
+                    <MudTabPanel Text="@L["Reports.Tabs.Scheduling"]" Icon="@Icons.Material.Filled.Schedule">
+                         <MudTextField T="string" Label="Schedule (Cron Expression)" HelperText="e.g., '0 0 * * MON' for every Monday at midnight." @bind-Value="Template.Config.Schedule" />
+                         <MudTextField T="string" Label="Distribution List (comma-separated emails)" HelperText="Emails to send the generated report to." @bind-Value="Template.Config.DistributionList" />
+                    </MudTabPanel>
+                    <MudTabPanel Text="@L["Reports.Tabs.Branding"]" Icon="@Icons.Material.Filled.BrandingWatermark">
+                        <MudFileUpload T="IBrowserFile" Accept=".png, .jpg">
+                            <ButtonTemplate>
+                                <MudButton HtmlTag="label"
+                                           Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           StartIcon="@Icons.Material.Filled.Image"
+                                           for="@context">
+                                    Upload Logo
+                                </MudButton>
+                            </ButtonTemplate>
+                        </MudFileUpload>
+                    </MudTabPanel>
+                </MudTabs>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Warning">No template loaded for editing.</MudAlert>
+            }
+            
+        </MudCardContent>
+        <MudCardActions>
+            <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Primary" Disabled="@_isProcessing" Class="ml-auto">
+                 @if (_isProcessing)
+                {
+                    <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true" />
+                    <MudText Class="ms-2">Saving...</MudText>
+                }
+                else
+                {
+                    @L["General.Save"]
+                }
+            </MudButton>
+        </MudCardActions>
+    </MudForm>
+</MudCard>
+
+
+@code {
+    /// <summary>
+    /// The report template view model to be created or edited.
+    /// </summary>
+    [Parameter]
+    public ReportTemplateViewModel Template { get; set; } = new();
+
+    private bool _isProcessing = false;
+
+    private async Task SaveTemplate()
+    {
+        _isProcessing = true;
+        try
+        {
+            // In a real app, send the Template object to the API
+            // await GatewayApi.SaveReportTemplateAsync(Template);
+            await Task.Delay(1500); // Simulate API call
+            NotificationService.ShowSuccess("Report template saved successfully.");
+        }
+        catch (Exception ex)
+        {
+            NotificationService.ShowError($"Failed to save template: {ex.Message}");
+        }
+        finally
+        {
+            _isProcessing = false;
+        }
+    }
+
+    // Initialize with a default object if one isn't passed in.
+    protected override void OnInitialized()
+    {
+        if (Template.Id == Guid.Empty)
+        {
+            Template = new ReportTemplateViewModel
+            {
+                Id = Guid.NewGuid(),
+                Name = "New Report Template",
+                Config = new ReportConfigData()
+            };
+        }
+    }
+}

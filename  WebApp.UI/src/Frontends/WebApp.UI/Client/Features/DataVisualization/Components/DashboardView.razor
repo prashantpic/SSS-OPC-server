@@ -1,0 +1,43 @@
+@using Opc.System.UI.Client.Shared.Models
+@using Opc.System.UI.Client.Features.DataVisualization.Components
+@using Opc.System.UI.Client.Features.AnomalyDetection.Components
+
+<!--
+This component is responsible for rendering a complete dashboard based on a given layout configuration.
+It dynamically instantiates and arranges various widget components like charts and gauges within a grid.
+-->
+@if (DashboardConfiguration != null)
+{
+    <MudGrid Spacing="3">
+        @if (DashboardConfiguration.Widgets != null && DashboardConfiguration.Widgets.Any())
+        {
+            @foreach (var widget in DashboardConfiguration.Widgets)
+            {
+                <MudItem xs="@widget.GridPosition.Xs" sm="@widget.GridPosition.Sm" md="@widget.GridPosition.Md">
+                    <MudPaper Class="pa-4" Style="height: 100%;">
+                        @* 
+                            This switch statement dynamically renders the correct widget component based on its type.
+                            Parameters for each widget are passed from its configuration dictionary.
+                        *@
+                        <DynamicWidget Widget="@widget" />
+                    </MudPaper>
+                </MudItem>
+            }
+        }
+        else
+        {
+            <MudItem xs="12">
+                <MudAlert Severity="Severity.Info">This dashboard is empty. Edit it to add widgets.</MudAlert>
+            </MudItem>
+        }
+    </MudGrid>
+}
+
+@code {
+    /// <summary>
+    /// The configuration object that defines the dashboard's layout and widgets.
+    /// This is supplied by a parent component, like DataExplorerPage.
+    /// </summary>
+    [Parameter]
+    public DashboardViewModel? DashboardConfiguration { get; set; }
+}

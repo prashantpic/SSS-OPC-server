@@ -1,0 +1,101 @@
+@page "/dashboards/{DashboardId}"
+@using ui.webapp.Models
+@using ui.webapp.ApiClient
+@using ui.webapp.Services
+@using ui.webapp.Shared.Feedback
+@using ui.webapp.Features.Dashboards.Components
+
+@inject IDataApiClient DataApiClient
+@inject INotificationService NotificationService
+
+<PageTitle>Dashboard</PageTitle>
+
+@if (_isLoading)
+{
+    <LoadingSpinner IsLoading="true" />
+}
+else if (DashboardLayout is not null)
+{
+    <MudText Typo="Typo.H4" GutterBottom="true">@DashboardLayout.Name</MudText>
+
+    <div class="dashboard-grid">
+        @foreach (var widget in DashboardLayout.Widgets)
+        {
+            <div class="dashboard-widget" style="@GetWidgetStyle(widget)">
+                @switch (widget.Type)
+                {
+                    case "TrendChart":
+                        <TrendChartWidget TagIds="@widget.TagIds" TimeRange="@widget.TimeRange" />
+                        break;
+                    case "Gauge":
+                        @* <GaugeWidget TagId="@widget.TagIds.FirstOrDefault()" /> *@
+                        <MudPaper Class="pa-4 fill-height">Gauge Widget Placeholder</MudPaper>
+                        break;
+                    case "SingleValue":
+                        @* <SingleValueWidget TagId="@widget.TagIds.FirstOrDefault()" /> *@
+                        <MudPaper Class="pa-4 fill-height">Single Value Widget Placeholder</MudPaper>
+                        break;
+                    default:
+                        <MudPaper Class="pa-4 fill-height">
+                            <MudText Color="Color.Error">Unknown widget type: @widget.Type</MudText>
+                        </MudPaper>
+                        break;
+                }
+            </div>
+        }
+    </div>
+}
+else
+{
+    <MudText Color="Color.Error">Could not load dashboard.</MudText>
+}
+
+
+@code {
+    [Parameter]
+    public string? DashboardId { get; set; }
+
+    private DashboardLayoutViewModel? DashboardLayout;
+    private bool _isLoading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (string.IsNullOrWhiteSpace(DashboardId) || !Guid.TryParse(DashboardId, out var dashboardGuid))
+        {
+            NotificationService.ShowError("Invalid Dashboard ID.");
+            _isLoading = false;
+            return;
+        }
+
+        _isLoading = true;
+        try
+        {
+            // Placeholder for actual API call
+            // DashboardLayout = await DataApiClient.GetDashboardLayoutAsync(dashboardGuid);
+            await Task.Delay(500); // Simulate API call
+            DashboardLayout = new DashboardLayoutViewModel
+            {
+                Name = "Main Production Line",
+                Widgets = new List<WidgetViewModel>
+                {
+                    new WidgetViewModel { Type = "TrendChart", TagIds = new List<string> { "tag1", "tag2" }, X = 1, Y = 1, Width = 6, Height = 4 },
+                    new WidgetViewModel { Type = "Gauge", TagIds = new List<string> { "tag3" }, X = 7, Y = 1, Width = 3, Height = 2 },
+                    new WidgetViewModel { Type = "SingleValue", TagIds = new List<string> { "tag4" }, X = 7, Y = 3, Width = 3, Height = 2 },
+                }
+            };
+        }
+        catch (Exception ex)
+        {
+            NotificationService.ShowError($"Failed to load dashboard: {ex.Message}");
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private string GetWidgetStyle(WidgetViewModel widget)
+    {
+        return $"grid-column: {widget.X} / span {widget.Width}; grid-row: {widget.Y} / span {widget.Height};";
+    }
+}

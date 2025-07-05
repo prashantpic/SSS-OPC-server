@@ -1,0 +1,46 @@
+sequenceDiagram
+    actor "«Timer»\nScheduler" as scheduler
+    participant "«Microservice»\nReporting Service" as REPOAPPREPORTING
+    participant "«Microservice»\nData Service" as REPOAPPDATA
+    participant "«Microservice»\nAI Service" as REPOAPPAI
+    participant "«Microservice»\nNotification Service" as REPOAPPNOTIFICATION
+    participant "«External»\nSMTP Gateway" as smtpgateway
+
+    scheduler-REPOAPPREPORTING: 1. TriggerScheduledReport(reportId, scheduleTime)
+    activate REPOAPPREPORTING
+    note over scheduler: Scheduler triggers a job based on a CRON expression or similar schedule defined in the ReportTemplate.
+
+    REPOAPPREPORTING-REPOAPPDATA: 2. GetReportTemplate(reportId)
+    activate REPOAPPDATA
+    note right of REPOAPPDATA: Retrieves template details including data sources, KPIs, format, and distribution list from relational database.
+    REPOAPPDATA--REPOAPPREPORTING: 2. reportTemplateDetails
+    deactivate REPOAPPDATA
+
+    loop Loop for each data source
+        note over REPOAPPREPORTING: Loop for each data source defined in the report template.
+        REPOAPPREPORTING-REPOAPPDATA: 3.1 QueryHistoricalData(query)
+        activate REPOAPPDATA
+        REPOAPPDATA--REPOAPPREPORTING: 3.1 historicalDataResults
+        deactivate REPOAPPDATA
+    end
+
+    alt template.includesAIInsights
+        REPOAPPREPORTING-REPOAPPAI: 4.1 GetReportInsights(timeRange, parameters)
+        activate REPOAPPAI
+        REPOAPPAI--REPOAPPREPORTING: 4.1 aiInsights
+        deactivate REPOAPPAI
+    end
+
+    REPOAPPREPORTING-REPOAPPREPORTING: 5. GenerateReportFile(template, data, insights)
+    note over REPOAPPREPORTING: Uses internal library (e.g., QuestPDF, ClosedXML) to create the report file in the specified format.
+
+    REPOAPPREPORTING-REPOAPPNOTIFICATION: 6. SendEmailWithAttachment(toList, subject, body, reportFile)
+    activate REPOAPPNOTIFICATION
+    note right of REPOAPPNOTIFICATION: Request is queued for sending. The Reporting Service's responsibility ends here for this workflow.
+    REPOAPPNOTIFICATION--REPOAPPREPORTING: 6. Ack
+    deactivate REPOAPPREPORTING
+
+    REPOAPPNOTIFICATION-smtpgateway: 7. SEND_EMAIL (with attachment)
+    activate smtpgateway
+    deactivate smtpgateway
+    deactivate REPOAPPNOTIFICATION

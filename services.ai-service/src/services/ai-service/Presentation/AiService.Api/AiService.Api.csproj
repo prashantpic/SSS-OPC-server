@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Title>AiService.Api</Title>
+    <Description>The main executable project for the AI Service, hosting the ASP.NET Core application.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Core\AiService.Application\AiService.Application.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\AiService.Infrastructure\AiService.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

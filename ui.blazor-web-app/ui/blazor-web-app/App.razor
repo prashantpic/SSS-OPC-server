@@ -1,0 +1,46 @@
+@using ui.webapp.Layout
+@using ui.webapp.Shared.Feedback
+@using ui.webapp.Services
+@inject ILocalizationService L
+
+<ErrorBoundary>
+    <ChildContent>
+        <CascadingAuthenticationState>
+            <Router AppAssembly="@typeof(App).Assembly">
+                <Found Context="routeData">
+                    <AuthorizeRouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)">
+                        <NotAuthorized>
+                             <MudText Typo="Typo.h5" Align="Align.Center" Class="mt-10">
+                                @L["NotAuthorized.Title"]
+                            </MudText>
+                            <MudText Align="Align.Center">You are not authorized to access this resource.</MudText>
+                        </NotAuthorized>
+                        <Authorizing>
+                            <LoadingSpinner IsLoading="true" />
+                        </Authorizing>
+                    </AuthorizeRouteView>
+                    <FocusOnNavigate RouteData="@routeData" Selector="h1" />
+                </Found>
+                <NotFound>
+                    <PageTitle>@L["NotFound.Title"]</PageTitle>
+                    <LayoutView Layout="@typeof(MainLayout)">
+                        <MudContainer MaxWidth="MaxWidth.Medium" Class="mt-16">
+                             <MudText Typo="Typo.h3" GutterBottom="true">@L["NotFound.Title"]</MudText>
+                             <MudText Class="mb-4">Sorry, there's nothing at this address.</MudText>
+                             <MudButton Href="/" Variant="Variant.Filled" Color="Color.Primary">Go to Home</MudButton>
+                        </MudContainer>
+                    </LayoutView>
+                </NotFound>
+            </Router>
+        </CascadingAuthenticationState>
+    </ChildContent>
+    <ErrorContent>
+        <div class="blazor-error-ui">
+            <h1 class="text-danger">An error has occurred.</h1>
+            <p>This application may no longer respond until reloaded.</p>
+            <a href="" class="btn btn-primary" @onclick:preventDefault @onclick="() => new System.Diagnostics.Process().Start(new System.Diagnostics.ProcessStartInfo(Navigation.Uri) { UseShellExecute = true })">Reload</a>
+        </div>
+    </ErrorContent>
+</ErrorBoundary>
+
+@inject NavigationManager Navigation

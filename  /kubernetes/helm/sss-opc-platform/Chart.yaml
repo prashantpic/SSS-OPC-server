@@ -1,0 +1,40 @@
+apiVersion: v2
+name: sss-opc-platform
+description: A Helm chart for deploying the entire SSS OPC Client platform on Kubernetes. This is a chart of charts.
+
+# This signifies that this chart is a deployable application.
+type: application
+
+# This is the chart version.
+# Increment this when you make changes to the chart templates.
+version: 0.1.0
+
+# This is the version of the application being deployed.
+# This version number should be updated with each new application release.
+appVersion: "1.0.0"
+
+# List of sub-charts (dependencies) that make up the SSS OPC Platform.
+# Helm will install these charts when this parent chart is installed.
+# This satisfies REQ-SAP-018.
+dependencies:
+  - name: api-gateway
+    version: "0.1.0"
+    repository: "file://./charts/api-gateway"
+    description: "Helm chart for the API Gateway microservice."
+
+  - name: auth-service
+    version: "0.1.0"
+    repository: "file://./charts/auth-service"
+    description: "Helm chart for the Authentication & Authorization microservice."
+
+  - name: data-service
+    version: "0.1.0"
+    repository: "file://./charts/data-service"
+    description: "Helm chart for the Data Service and Ingestion microservice."
+  
+  # Add other microservice sub-charts here as they are created.
+  # Example:
+  # - name: reporting-service
+  #   version: "0.1.0"
+  #   repository: "file://./charts/reporting-service"
+  #   description: "Helm chart for the Reporting microservice."

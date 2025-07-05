@@ -1,0 +1,95 @@
+@using Opc.System.UI.Client.Shared.Models
+@using Opc.System.UI.Client.Shared.Services.Api
+@using System.Collections.Generic
+@using Microsoft.Extensions.Localization
+@inject IGatewayApiClient GatewayApi
+@inject IStringLocalizer<NamespaceBrowser> L
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">@L["Configuration.Tags.BrowseServer"]</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudTreeView T="NamespaceNodeViewModel" Items="_nodes"
+                     ServerData="new Func<NamespaceNodeViewModel, Task<IEnumerable<NamespaceNodeViewModel>>>(LoadServerData)"
+                     MultiSelection="true" @bind-SelectedValues="_selectedNodes">
+            <ItemTemplate>
+                <MudTreeViewItem @bind-Expanded="@context.IsExpanded" T="NamespaceNodeViewModel" Items="@context.Children" Value="@context"
+                                 Icon="@context.Icon" Text="@context.Name" />
+            </ItemTemplate>
+        </MudTreeView>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">@L["General.Cancel"]</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Submit">@L["General.Submit"]</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    MudDialogInstance MudDialog { get; set; } = new();
+
+    /// <summary>
+    /// The ID of the OPC server to browse.
+    /// </summary>
+    [Parameter]
+    public string ServerId { get; set; } = string.Empty;
+
+    private HashSet<NamespaceNodeViewModel> _nodes = new();
+    private HashSet<NamespaceNodeViewModel> _selectedNodes = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _nodes = (await LoadServerData(null)).ToHashSet();
+    }
+
+    /// <summary>
+    /// This method is called by the MudTreeView component to dynamically load child nodes
+    /// when a parent node is expanded. This implements the lazy-loading pattern.
+    /// </summary>
+    private async Task<IEnumerable<NamespaceNodeViewModel>> LoadServerData(NamespaceNodeViewModel? parentNode)
+    {
+        try
+        {
+            // In a real app, call the API:
+            // var parentNodeId = parentNode?.NodeId;
+            // return await GatewayApi.BrowseNamespaceAsync(ServerId, parentNodeId);
+
+            // Mocking the API call for demonstration:
+            await Task.Delay(250);
+            var results = new List<NamespaceNodeViewModel>();
+            if (parentNode == null)
+            {
+                results.Add(new NamespaceNodeViewModel { Name = "Objects", NodeId = "ns=0;i=85", Icon = Icons.Material.Filled.Folder, HasChildren = true });
+                results.Add(new NamespaceNodeViewModel { Name = "Types", NodeId = "ns=0;i=86", Icon = Icons.Material.Filled.Folder, HasChildren = true });
+            }
+            else if (parentNode.Name == "Objects")
+            {
+                results.Add(new NamespaceNodeViewModel { Name = "Server", NodeId = "ns=0;i=2253", Icon = Icons.Material.Filled.Folder, HasChildren = true });
+                results.Add(new NamespaceNodeViewModel { Name = "Machine1", NodeId = "ns=2;s=Machine1", Icon = Icons.Material.Filled.DeveloperBoard, HasChildren = true });
+            }
+            else if (parentNode.Name == "Machine1")
+            {
+                results.Add(new NamespaceNodeViewModel { Name = "Temperature", NodeId = "ns=2;s=Machine1.Temperature", Icon = Icons.Material.Filled.FilterTiltShift, HasChildren = false });
+                results.Add(new NamespaceNodeViewModel { Name = "Pressure", NodeId = "ns=2;s=Machine1.Pressure", Icon = Icons.Material.Filled.FilterTiltShift, HasChildren = false });
+            }
+            return results;
+        }
+        catch (Exception)
+        {
+            // In a real app, use NotificationService.ShowError
+            return Enumerable.Empty<NamespaceNodeViewModel>();
+        }
+    }
+
+    private void Submit()
+    {
+        var selectedTags = _selectedNodes
+            .Where(n => !n.HasChildren) // Only select leaf nodes (tags)
+            .Select(n => new TagViewModel { NodeId = n.NodeId, DataType = "Unknown" })
+            .ToList();
+        MudDialog.Close(DialogResult.Ok(selectedTags));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

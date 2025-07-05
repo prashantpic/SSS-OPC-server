@@ -1,0 +1,12 @@
+@if (IsLoading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+
+@code {
+    /// <summary>
+    /// If true, the loading spinner is visible.
+    /// </summary>
+    [Parameter]
+    public bool IsLoading { get; set; }
+}

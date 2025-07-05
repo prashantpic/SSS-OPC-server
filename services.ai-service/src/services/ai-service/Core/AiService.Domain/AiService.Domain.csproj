@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Title>AiService.Domain</Title>
+    <Description>The core of the application. It contains all domain models, entities, aggregates, value objects, and business rules. It is completely independent of any technology-specific implementation details.</Description>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OPC System UI</title>
+    <base href="/" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap" rel="stylesheet" />
+    <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
+    <!-- If you add any custom styles, they should be referenced here -->
+</head>
+
+<body>
+    <div id="app">
+        <!-- 
+            This is the root DOM element where the Blazor application will be rendered.
+            The "Loading..." content provides initial feedback to the user while the 
+            WebAssembly runtime and application assets are being downloaded and initialized.
+        -->
+        <div style="position:absolute; top:30vh; width:100%; text-align:center">
+            <h1>OPC System</h1>
+            <p>Loading User Interface...</p>
+            <svg version="1.1" id="L2" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+                 viewBox="0 0 100 100" enable-background="new 0 0 100 100" xml:space="preserve" style="width:100px;height:100px;">
+                <circle fill="none" stroke="#2c3e50" stroke-width="4" stroke-miterlimit="10" cx="50" cy="50" r="48" />
+                <line fill="none" stroke-linecap="round" stroke="#2c3e50" stroke-width="4" stroke-miterlimit="10" x1="50" y1="50" x2="85" y2="50.5">
+                    <animateTransform attributeName="transform"
+                                      dur="2s"
+                                      type="rotate"
+                                      from="0 50 50"
+                                      to="360 50 50"
+                                      repeatCount="indefinite" />
+                </line>
+                <line fill="none" stroke-linecap="round" stroke="#2c3e50" stroke-width="4" stroke-miterlimit="10" x1="50" y1="50" x2="49.5" y2="74">
+                    <animateTransform attributeName="transform"
+                                      dur="15s"
+                                      type="rotate"
+                                      from="0 50 50"
+                                      to="360 50 50"
+                                      repeatCount="indefinite" />
+                </line>
+            </svg>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui">
+        An unhandled error has occurred.
+        <a href="" class="reload">Reload</a>
+        <a class="dismiss">🗙</a>
+    </div>
+    
+    <!-- This script starts the Blazor WebAssembly runtime -->
+    <script src="_framework/blazor.webassembly.js"></script>
+    <!-- This script is required by the MudBlazor component library -->
+    <script src="_content/MudBlazor/MudBlazor.min.js"></script>
+</body>
+
+</html>

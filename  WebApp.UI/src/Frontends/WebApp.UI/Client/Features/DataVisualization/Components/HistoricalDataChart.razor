@@ -1,0 +1,129 @@
+@using Opc.System.UI.Client.Shared.Services.Api
+@using Opc.System.UI.Client.Shared.Services.Notification
+@using Opc.System.UI.Client.Shared.Models
+@using Microsoft.Extensions.Localization
+@using Plotly.Blazor
+@using Plotly.Blazor.Traces
+@using Plotly.Blazor.LayoutLib
+
+@inject IGatewayApiClient GatewayApi
+@inject INotificationService NotificationService
+@inject IStringLocalizer<HistoricalDataChart> L
+
+<!--
+This specialized chart component queries and displays historical data trends. 
+It utilizes the Plotly.Blazor library and is designed for performance, including
+clear loading and error states as required by REQ-UIX-010.
+-->
+<ErrorBoundary>
+    <ChildContent>
+        @if (_isLoading)
+        {
+            <div class="d-flex justify-center align-center" style="height: 300px;">
+                <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+            </div>
+        }
+        else if (_chartData != null && _chartData.Any())
+        {
+            <PlotlyChart Data="_chartData" Layout="_layout" Style="height: 300px; width: 100%;" />
+        }
+        else
+        {
+            <div class="d-flex justify-center align-center" style="height: 300px;">
+                <MudText>No data available for the selected period.</MudText>
+            </div>
+        }
+    </ChildContent>
+    <ErrorContent>
+        <MudAlert Severity="Severity.Error">An error occurred while rendering this chart.</MudAlert>
+    </ErrorContent>
+</ErrorBoundary>
+
+
+@code {
+    /// <summary>
+    /// A list of Tag IDs for which to fetch historical data.
+    /// </summary>
+    [Parameter]
+    public List<string> TagIds { get; set; } = new();
+
+    /// <summary>
+    /// The time range for the historical data query.
+    /// </summary>
+    [Parameter]
+    public DateTimeRange? TimeRange { get; set; }
+
+    private bool _isLoading = true;
+    private IList<ITrace> _chartData = new List<ITrace>();
+    private Layout _layout = new Layout
+    {
+        Title = new Title { Text = "Historical Data Trend" },
+        XAxis = new List<XAxis> { new XAxis() },
+        YAxis = new List<YAxis> { new YAxis() },
+        Margin = new Margin { L = 40, R = 20, B = 30, T = 80 }
+    };
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (TagIds == null || !TagIds.Any() || TimeRange == null)
+        {
+            _chartData.Clear();
+            _isLoading = false;
+            return;
+        }
+
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        _isLoading = true;
+        _chartData.Clear();
+        StateHasChanged();
+
+        try
+        {
+            // In a real implementation, this would be a single API call.
+            // var query = new HistoricalQueryDto { TagIds = this.TagIds, StartTime = TimeRange.Start, EndTime = TimeRange.End };
+            // var results = await GatewayApi.GetHistoricalDataAsync(query);
+
+            // Mocking the API call for demonstration purposes
+            await Task.Delay(500); // Simulate network latency
+
+            var results = new List<HistoricalDataViewModel>();
+            var now = DateTime.UtcNow;
+            foreach (var tagId in TagIds)
+            {
+                var dataPoints = new List<object>();
+                var timestamps = new List<object>();
+                for (int i = 100; i >= 0; i--)
+                {
+                    timestamps.Add(now.AddMinutes(-i));
+                    dataPoints.Add(new Random().NextDouble() * 50 + 20);
+                }
+                results.Add(new HistoricalDataViewModel { TagId = tagId, Timestamps = timestamps, Values = dataPoints });
+            }
+
+            // Transform DTO to Plotly trace
+            foreach (var result in results)
+            {
+                _chartData.Add(new Scatter
+                {
+                    Name = result.TagId,
+                    X = result.Timestamps,
+                    Y = result.Values,
+                    Mode = ModeFlag.Lines
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            NotificationService.ShowError($"{L["General.Error.DataLoadFailed"]}: {ex.Message}");
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+}

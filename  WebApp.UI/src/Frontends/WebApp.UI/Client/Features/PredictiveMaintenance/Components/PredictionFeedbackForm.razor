@@ -1,0 +1,92 @@
+@using Opc.System.UI.Client.Shared.Models
+@using Opc.System.UI.Client.Shared.Services.Api
+@using Opc.System.UI.Client.Shared.Services.Notification
+@using Microsoft.Extensions.Localization
+@inject IGatewayApiClient GatewayApi
+@inject INotificationService NotificationService
+@inject IStringLocalizer<PredictionFeedbackForm> L
+
+<!--
+A simple form that allows authorized users to provide feedback on a specific
+maintenance prediction. This feedback is captured for model refinement, as per REQ-UIX-013.
+-->
+<MudCard>
+    <MudForm Model="@_feedbackModel" @ref="_form" OnValidSubmit="OnValidSubmit">
+        <MudCardHeader>
+            <CardHeaderContent>
+                <MudText Typo="Typo.h6">@L["Feedback.Prediction.Title"]</MudText>
+            </CardHeaderContent>
+        </MudCardHeader>
+        <MudCardContent>
+            @if(Prediction != null)
+            {
+                 <MudText><strong>Prediction For:</strong> @Prediction.TargetDescription</MudText>
+                 <MudText><strong>Predicted Failure on:</strong> @Prediction.PredictedDate.ToShortDateString()</MudText>
+                 <MudDivider Class="my-4" />
+            }
+            <MudRadioGroup @bind-Value="@_feedbackModel.IsCorrect" Required="true" RequiredError="You must validate the prediction.">
+                <MudRadio Option="true" Color="Color.Success">@L["Feedback.Prediction.Correct"]</MudRadio>
+                <MudRadio Option="false" Color="Color.Error">@L["Feedback.Prediction.Incorrect"]</MudRadio>
+            </MudRadioGroup>
+            <MudTextField T="string" Label="Comments (Optional)" @bind-Value="@_feedbackModel.Comments" Lines="3" Class="mt-4" />
+        </MudCardContent>
+        <MudCardActions>
+            <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Primary" Disabled="@_isProcessing" Class="ml-auto">
+                @if (_isProcessing)
+                {
+                    <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true" />
+                    <MudText Class="ms-2">Processing</MudText>
+                }
+                else
+                {
+                    @L["General.Submit"]
+                }
+            </MudButton>
+        </MudCardActions>
+    </MudForm>
+</MudCard>
+
+
+@code {
+    /// <summary>
+    /// The prediction view model containing the details of the prediction to be reviewed.
+    /// </summary>
+    [Parameter]
+    public PredictionViewModel? Prediction { get; set; }
+
+    private MudForm? _form;
+    private FeedbackModel _feedbackModel = new();
+    private bool _isProcessing = false;
+
+    private async Task OnValidSubmit()
+    {
+        _isProcessing = true;
+        try
+        {
+            // In a real app, construct the DTO from the model and the Prediction ID
+            // var feedbackDto = new PredictionFeedbackDto { ... };
+            // await GatewayApi.SubmitPredictionFeedbackAsync(feedbackDto);
+            await Task.Delay(1000); // Simulate API call
+
+            NotificationService.ShowSuccess("Feedback submitted successfully. Thank you!");
+            // Optionally, raise an event to notify the parent component that submission is complete.
+        }
+        catch (Exception ex)
+        {
+            NotificationService.ShowError($"Failed to submit feedback: {ex.Message}");
+        }
+        finally
+        {
+            _isProcessing = false;
+        }
+    }
+
+    /// <summary>
+    /// Local model for the form data.
+    /// </summary>
+    public class FeedbackModel
+    {
+        public bool? IsCorrect { get; set; }
+        public string Comments { get; set; } = string.Empty;
+    }
+}

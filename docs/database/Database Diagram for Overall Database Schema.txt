@@ -1,0 +1,77 @@
+erDiagram
+
+    User {
+        UUID userId PK
+    }
+    Role {
+        UUID roleId PK
+    }
+    Permission {
+        UUID permissionId PK
+    }
+    UserRole {
+        UUID userId PK "FK to User.userId"
+        UUID roleId PK "FK to Role.roleId"
+    }
+    RolePermission {
+        UUID roleId PK "FK to Role.roleId"
+        UUID permissionId PK "FK to Permission.permissionId"
+    }
+    OpcServer {
+        UUID serverId PK
+    }
+    OpcTag {
+        UUID tagId PK
+    }
+    Subscription {
+        UUID subscriptionId PK
+    }
+    DataLog {
+        UUID logId PK
+    }
+    HistoricalData {
+        UUID dataId PK
+    }
+    AlarmEvent {
+        UUID alarmId PK
+    }
+    Dashboard {
+        UUID dashboardId PK
+    }
+    AuditLog {
+        UUID logId PK
+    }
+    ReportTemplate {
+        UUID templateId PK
+    }
+    DataRetentionPolicy {
+        UUID policyId PK
+    }
+    PredictiveMaintenanceModel {
+        UUID modelId PK
+    }
+    BlockchainTransaction {
+        UUID transactionId PK
+    }
+    MigrationStrategy {
+        UUID strategyId PK
+    }
+
+    %% Relationships
+    User ||--|{ UserRole : "User side of UserRoles"
+    Role ||--|{ UserRole : "Role side of UserRoles"
+
+    Role ||--|{ RolePermission : "Role side of RolePermissions"
+    Permission ||--|{ RolePermission : "Permission side of RolePermissions"
+
+    OpcServer ||--|{ OpcTag : "OpcServerTags"
+    OpcServer ||--|{ Subscription : "OpcServerSubscriptions"
+
+    OpcTag ||--|{ DataLog : "OpcTagDataLogs"
+    User |o--o{ DataLog : "UserDataLogs"
+
+    OpcTag ||--|{ HistoricalData : "OpcTagHistoricalData"
+    OpcTag ||--|{ AlarmEvent : "OpcTagAlarmEvents"
+
+    User ||--|{ Dashboard : "UserDashboards"
+    User |o--o{ AuditLog : "UserAuditLogs"

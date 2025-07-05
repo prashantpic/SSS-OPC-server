@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+option csharp_namespace = "ManagementService.Api.Grpc";
+
+package management.v1;
+
+// Service for OPC clients to register and report health
+service ClientLifecycleService {
+  // Registers a new client instance with the management service
+  rpc RegisterClient (RegisterClientRequest) returns (RegisterClientReply);
+  
+  // Reports ongoing health status and KPIs from a client
+  rpc ReportHealth (ReportHealthRequest) returns (ReportHealthReply);
+}
+
+// The request message containing the client's initial details.
+message RegisterClientRequest {
+  string name = 1;
+  string site = 2;
+}
+
+// The response message containing the new client's ID and initial configuration.
+message RegisterClientReply {
+  string client_id = 1; // The new UUID for the client
+  ClientConfigurationMessage configuration = 2;
+}
+
+// The request message for reporting health.
+message ReportHealthRequest {
+  string client_id = 1;
+  HealthStatusMessage health_status = 2;
+}
+
+// The response message for a health report.
+message ReportHealthReply {
+  // This can be used in the future to send commands or acknowledge receipt.
+  // For now, it's empty.
+}
+
+// Represents the configuration for a client.
+message ClientConfigurationMessage {
+  int32 polling_interval_seconds = 1;
+  repeated TagConfigMessage tag_configurations = 2;
+}
+
+// Represents a single tag to be monitored.
+message TagConfigMessage {
+    string tag_name = 1;
+    int32 scan_rate = 2;
+}
+
+// Represents the health status KPIs of a client.
+message HealthStatusMessage {
+  bool is_connected = 1;
+  double data_throughput = 2;
+  double cpu_usage_percent = 3;
+}

@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <RunAOTCompilation>true</RunAOTCompilation>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Authorization" Version="8.0.4" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="8.0.4" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="8.0.4" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Localization" Version="8.0.4" />
+    <PackageReference Include="MudBlazor" Version="6.19.1" />
+    <PackageReference Include="Plotly.Blazor" Version="2.25.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Features\AnomalyDetection\Pages\" />
+    <Folder Include="Features\PredictiveMaintenance\Pages\" />
+    <Folder Include="Features\Reporting\Pages\" />
+    <Folder Include="Features\Configuration\Pages\" />
+    <Folder Include="Features\UserManagement\Components\" />
+    <Folder Include="Features\UserManagement\Pages\" />
+    <Folder Include="Shared\Services\Api\" />
+    <Folder Include="Shared\Services\Authentication\" />
+    <Folder Include="Shared\Services\State\" />
+  </ItemGroup>
+
+</Project>

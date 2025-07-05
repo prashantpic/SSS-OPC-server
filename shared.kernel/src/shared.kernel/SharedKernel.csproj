@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RepositoryId>REPO-SAP-012</RepositoryId>
+    <Description>This repository serves as a foundational Shared Kernel class library for a distributed industrial data platform. Its primary purpose is to define and share common domain concepts, data contracts, API definitions, and base types across all microservices in the system.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Contracts\Grpc\management.proto" GrpcServices="Both" />
+    <Protobuf Include="Contracts\Grpc\ai_processing.proto" GrpcServices="Both" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.25.3" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.61.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.62.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

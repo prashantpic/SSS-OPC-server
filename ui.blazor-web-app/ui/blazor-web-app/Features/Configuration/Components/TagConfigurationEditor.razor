@@ -1,0 +1,128 @@
+@using ui.webapp.Models
+@using ui.webapp.ApiClient
+@using ui.webapp.Services
+
+@inject IManagementApiClient ManagementApiClient
+@inject INotificationService NotificationService
+
+<MudGrid>
+    <MudItem xs="12" sm="6">
+        <MudPaper Class="pa-4" Style="height: 500px; overflow-y: auto;">
+            <MudText Typo="Typo.h6" GutterBottom="true">OPC Server Namespace</MudText>
+            @if (_isLoading)
+            {
+                <MudProgressCircular Indeterminate="true" />
+            }
+            else
+            {
+                 <MudTreeView T="OpcNodeDto" Items="_treeNodes" CanDrag="true" ItemDropped="HandleTagDrop">
+                    <ItemTemplate>
+                        <MudTreeViewItem @bind-Expanded="@context.IsExpanded" 
+                                         Value="@context" 
+                                         Icon="@(context.HasChildren ? Icons.Material.Filled.Folder : Icons.Material.Filled.DataObject)"
+                                         OnExpandedChanged="(_) => HandleNodeExpanded(context)">
+                            @context.Name
+                        </MudTreeViewItem>
+                    </ItemTemplate>
+                </MudTreeView>
+            }
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="12" sm="6">
+        <MudPaper Class="pa-4" Style="height: 500px;">
+            <MudText Typo="Typo.h6" GutterBottom="true">Configured Tags</MudText>
+            <MudDropZone T="OpcNodeDto" CanDrop="CanDropItem" Class="d-flex flex-column flex-grow-1" Style="min-height: 400px; border: 2px dashed var(--mud-palette-lines-default); border-radius: 4px;">
+                 <MudList Clickable="false">
+                    @foreach (var tag in _configuredTags)
+                    {
+                        <MudListItem Icon="@Icons.Material.Filled.DataObject">
+                            @tag.Name
+                        </MudListItem>
+                    }
+                </MudList>
+            </MudDropZone>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+<MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveChanges" Class="mt-4">Save Configuration</MudButton>
+
+@code {
+    [Parameter]
+    public Guid ClientId { get; set; }
+
+    private HashSet<OpcNodeDto> _treeNodes = new();
+    private List<OpcNodeDto> _configuredTags = new();
+    private bool _isLoading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _isLoading = true;
+        try
+        {
+            // Fetch root nodes
+            var rootNodes = await ManagementApiClient.BrowseNamespaceAsync(ClientId, "ns=0;i=84"); // Standard root node
+            _treeNodes = new HashSet<OpcNodeDto>(rootNodes);
+
+            // Fetch current config
+            var config = await ManagementApiClient.GetClientConfigurationAsync(ClientId);
+            // _configuredTags = config.Tags; // Assuming the DTO has a list of tags
+        }
+        catch (Exception ex)
+        {
+            NotificationService.ShowError($"Failed to load data: {ex.Message}");
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task HandleNodeExpanded(OpcNodeDto node)
+    {
+        if (node.HasChildren && !node.Children.Any())
+        {
+            try
+            {
+                var children = await ManagementApiClient.BrowseNamespaceAsync(ClientId, node.NodeId);
+                node.Children.AddRange(children);
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                NotificationService.ShowError($"Failed to browse node: {ex.Message}");
+            }
+        }
+    }
+
+    private void HandleTagDrop(MudDropContainer<OpcNodeDto> dropItem)
+    {
+        var draggedItem = dropItem.Item;
+        if (draggedItem is not null && !_configuredTags.Any(t => t.NodeId == draggedItem.NodeId))
+        {
+            _configuredTags.Add(draggedItem);
+        }
+    }
+    
+    private bool CanDropItem(OpcNodeDto item)
+    {
+        // Only allow dropping of actual tags (nodes without children), not folders
+        return !item.HasChildren;
+    }
+
+    private async Task SaveChanges()
+    {
+        try
+        {
+            var configDto = new ClientConfigurationDto
+            {
+                // Tags = _configuredTags
+            };
+            await ManagementApiClient.UpdateClientConfigurationAsync(ClientId, configDto);
+            NotificationService.ShowSuccess("Configuration saved successfully.");
+        }
+        catch (Exception ex)
+        {
+            NotificationService.ShowError($"Failed to save configuration: {ex.Message}");
+        }
+    }
+}

@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package Contracts.Grpc;
+
+// Service for AI-driven insights like predictive maintenance and anomaly detection.
+service AiProcessingService {
+  // Requests a maintenance prediction based on historical data.
+  rpc GetMaintenancePrediction(MaintenancePredictionRequest) returns (MaintenancePredictionResponse);
+  // Streams real-time data for anomaly detection and receives anomaly events back.
+  rpc DetectAnomalies(stream AnomalyDetectionRequest) returns (stream AnomalyDetectionResponse);
+}
+
+// ---- Message Definitions ----
+
+message DataPoint {
+  string tag_identifier = 1;
+  double value = 2;
+  int64 timestamp_ticks = 3;
+}
+
+message MaintenancePredictionRequest {
+  string model_id = 1;
+  repeated DataPoint historical_data = 2;
+}
+
+message MaintenancePredictionResponse {
+  int64 predicted_failure_time_ticks = 1;
+  double confidence_score = 2;
+  string details = 3;
+}
+
+message AnomalyDetectionRequest {
+  DataPoint data_point = 1;
+}
+
+message AnomalyDetectionResponse {
+  DataPoint data_point = 1;
+  bool is_anomaly = 2;
+  double anomaly_score = 3;
+  string reason = 4;
+}

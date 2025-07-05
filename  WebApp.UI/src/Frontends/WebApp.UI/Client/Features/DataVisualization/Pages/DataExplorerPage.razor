@@ -1,0 +1,128 @@
+@page "/dashboards"
+@using Opc.System.UI.Client.Features.DataVisualization.Components
+@using Opc.System.UI.Client.Shared.Models
+@using Opc.System.UI.Client.Shared.Services.Api
+@using Microsoft.Extensions.Localization
+@inject IGatewayApiClient GatewayApi
+@inject IStringLocalizer<DataExplorerPage> L
+
+<PageTitle>@L["Dashboard.Title"]</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">@L["Dashboard.Title"]</MudText>
+<MudText Class="mb-4">Select an existing dashboard to view, or create a new one.</MudText>
+
+@if (_isLoading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_dashboards != null)
+{
+    <MudPaper Class="pa-4 mb-4">
+        <MudGrid>
+            <MudItem xs="12" sm="6" md="4">
+                <MudSelect T="Guid?" Label="Select a Dashboard" @bind-Value="_selectedDashboardId" AnchorOrigin="Origin.BottomCenter">
+                    @foreach (var dashboard in _dashboards)
+                    {
+                        <MudSelectItem T="Guid?" Value="@dashboard.Id">@dashboard.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="8" Class="d-flex align-center">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="CreateNewDashboard">Create New</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit" OnClick="EditDashboard" Disabled="@(_selectedDashboard == null)" Class="ml-2">Edit</MudButton>
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    @if (_selectedDashboard != null)
+    {
+        <DashboardView DashboardConfiguration="@_selectedDashboard" />
+    }
+    else
+    {
+        <MudAlert Severity="Severity.Info">Please select a dashboard to view.</MudAlert>
+    }
+}
+else
+{
+    <MudAlert Severity="Severity.Error">@L["General.Error.DataLoadFailed"]</MudAlert>
+}
+
+@code {
+    private bool _isLoading = true;
+    private List<DashboardViewModel>? _dashboards;
+    private DashboardViewModel? _selectedDashboard;
+    private Guid? _selectedDashboardId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            // In a real application, this would fetch the dashboards for the current user.
+            // _dashboards = await GatewayApi.GetDashboardsAsync();
+
+            // For demonstration, we create mock data.
+            CreateMockData();
+        }
+        catch (Exception)
+        {
+            // In a real app, use NotificationService to show an error.
+            _dashboards = null;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void CreateMockData()
+    {
+        var dashboard1Id = Guid.NewGuid();
+        _dashboards = new List<DashboardViewModel>
+        {
+            new DashboardViewModel
+            {
+                Id = dashboard1Id,
+                Name = "Factory Floor Overview",
+                Widgets = new List<WidgetViewModel>
+                {
+                    new WidgetViewModel { Id = Guid.NewGuid(), Type = WidgetType.HistoricalDataChart, GridPosition = new GridPosition { Xs = 12, Sm = 6 }, Config = new Dictionary<string, object> { { "TagIds", new List<string> { "ns=2;s=Machine1.Temp" } } } },
+                    new WidgetViewModel { Id = Guid.NewGuid(), Type = WidgetType.Kpi, GridPosition = new GridPosition { Xs = 6, Sm = 3 }, Config = new Dictionary<string, object>() },
+                    new WidgetViewModel { Id = Guid.NewGuid(), Type = WidgetType.Kpi, GridPosition = new GridPosition { Xs = 6, Sm = 3 }, Config = new Dictionary<string, object>() }
+                }
+            },
+            new DashboardViewModel
+            {
+                Id = Guid.NewGuid(),
+                Name = "Energy Consumption",
+                Widgets = new List<WidgetViewModel>()
+            }
+        };
+
+        // Pre-select the first dashboard
+        _selectedDashboardId = dashboard1Id;
+    }
+
+
+    protected override void OnParametersSet()
+    {
+        if (_selectedDashboardId.HasValue)
+        {
+            _selectedDashboard = _dashboards?.FirstOrDefault(d => d.Id == _selectedDashboardId.Value);
+        }
+        else
+        {
+            _selectedDashboard = null;
+        }
+    }
+
+    private void CreateNewDashboard()
+    {
+        // Logic to open a dialog/navigate to a page for creating a new dashboard
+    }
+
+    private void EditDashboard()
+    {
+        // Logic to open a dialog/navigate to a page for editing the selected dashboard
+    }
+}

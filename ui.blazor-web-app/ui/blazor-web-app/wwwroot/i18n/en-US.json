@@ -1,0 +1,17 @@
+{
+  "Nav.Dashboards": "Dashboards",
+  "Nav.Alarms": "Alarms",
+  "Nav.AlarmConsole": "Alarm Console",
+  "Nav.Management": "Management",
+  "Nav.ClientInstances": "Client Instances",
+  "Nav.Configuration": "Configuration",
+  "Button.Save": "Save",
+  "Button.Acknowledge": "Acknowledge",
+  "Page.Alarms.Title": "Alarm Console",
+  "Page.Clients.Title": "Client Instances",
+  "Grid.Alarms.Severity": "Severity",
+  "Grid.Alarms.Timestamp": "Timestamp",
+  "Grid.Alarms.Message": "Message",
+  "NotFound.Title": "Page Not Found",
+  "NotAuthorized.Title": "Not Authorized"
+}

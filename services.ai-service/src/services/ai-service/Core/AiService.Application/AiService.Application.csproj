@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Title>AiService.Application</Title>
+    <Description>This layer orchestrates the use cases of the application. It contains application logic, commands, queries (following the CQRS pattern), and interfaces for infrastructure-level concerns. It depends only on the Domain layer.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MediatR" Version="12.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AiService.Domain\AiService.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

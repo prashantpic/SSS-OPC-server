@@ -1,0 +1,47 @@
+sequenceDiagram
+    participant "AI Service" as REPOAPPAI
+    actor "Prometheus" as Prometheus
+    actor "Alertmanager" as Alertmanager
+    participant "Notification Service" as REPOAPPNOTIFICATION
+    actor "External Notification Gateway" as ExternalNotificationGateway
+
+    note over Prometheus: Initial configuration for Prometheus (scrape targets, alerting rules) and Alertmanager (routing rules) is defined in 'ops.observability-config' repository and applied during deployment.
+
+    REPOAPPAI-REPOAPPAI: 1. [Internal State: CPU load increases]
+    activate REPOAPPAI
+    REPOAPPAI-REPOAPPAI: 2. OpenTelemetry SDK updates 'cpuutilization' metric value
+
+    loop 3. [Every scrape interval]
+        Prometheus-REPOAPPAI: 3.1. GET /metrics
+        activate Prometheus
+        REPOAPPAI--Prometheus: 3.1. 200 OK [cpuutilization metric data]
+        Prometheus-Prometheus: 3.2. Stores time-series data
+        deactivate Prometheus
+    end
+
+    note right of Prometheus: 4. Continuously evaluates alerting rules. REQ-6-005: Alerting rule evaluation logic is defined.
+
+    alt 5. [Condition Met: avgovertime(cpu_utilization[5m])  90%]
+        Prometheus-Alertmanager: 5.1. POST /api/v1/alerts [Payload: Firing Alert]
+        activate Prometheus
+        activate Alertmanager
+        Alertmanager--Prometheus: 5.1. 200 OK
+        deactivate Prometheus
+
+        Alertmanager-Alertmanager: 5.2. Process alert: deduplicate, group, and route based on config
+
+        Alertmanager-REPOAPPNOTIFICATION: 5.3. POST /api/notify [Webhook payload]
+        activate REPOAPPNOTIFICATION
+        REPOAPPNOTIFICATION--Alertmanager: 5.3. 202 Accepted
+        deactivate Alertmanager
+
+        REPOAPPNOTIFICATION-REPOAPPNOTIFICATION: 5.4. Process notification request (e.g., find recipients, format message)
+        
+        REPOAPPNOTIFICATION-ExternalNotificationGateway: 5.5. Send notification (Email, SMS, etc.)
+        activate ExternalNotificationGateway
+        deactivate ExternalNotificationGateway
+
+        deactivate REPOAPPNOTIFICATION
+    end
+
+    deactivate REPOAPPAI

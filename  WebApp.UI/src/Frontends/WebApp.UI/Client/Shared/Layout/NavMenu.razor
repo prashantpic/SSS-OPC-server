@@ -1,0 +1,36 @@
+@using Microsoft.Extensions.Localization
+@inject IStringLocalizer<NavMenu> L
+
+<!--
+This component provides the main navigation menu for the application.
+It contains links to all major features and may render items conditionally
+based on user permissions, as specified in the SDS.
+-->
+<MudNavMenu>
+    <MudNavLink Href="/dashboards" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Dashboard">@L["Navigation.Dashboard"]</MudNavLink>
+
+    <MudNavLink Href="/dataview" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.ShowChart">@L["Navigation.DataVisualization"]</MudNavLink>
+    
+    <MudNavGroup Title="System Management" Icon="@Icons.Material.Filled.Settings" Expanded="true">
+        <MudNavLink Href="/configuration" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Build">@L["Navigation.Configuration"]</MudNavLink>
+        <MudNavLink Href="/reporting" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Assessment">@L["Navigation.Reporting"]</MudNavLink>
+    </MudNavGroup>
+    
+    <!-- Example of a permission-based link -->
+    <AuthorizeView Roles="Administrator">
+        <MudNavGroup Title="Admin" Icon="@Icons.Material.Filled.AdminPanelSettings" Expanded="false">
+            <MudNavLink Href="/admin/users" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.People">User Management</MudNavLink>
+            <MudNavLink Href="/admin/system" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Security">System Settings</MudNavLink>
+        </MudNavGroup>
+    </AuthorizeView>
+
+    <MudDivider Class="my-2" />
+
+    <!-- REQ-UIX-024: A link to the documentation portal must be included. -->
+    <MudNavLink Href="https://opc-system-docs.example.com" Target="_blank" Icon="@Icons.Material.Filled.HelpOutline">@L["Navigation.Documentation"]</MudNavLink>
+</MudNavMenu>
+
+@*
+    This is a placeholder for a language selector component. It could be added here.
+    <LanguageSelector />
+*@

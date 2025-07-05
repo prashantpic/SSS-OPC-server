@@ -1,0 +1,55 @@
+sequenceDiagram
+    actor "Administrator" as ADMIN
+    participant "Presentation Layer (Blazor UI)" as REPOAPPPRESENTATION
+    participant "Management Service" as REPOAPPMGMT
+    participant "Data Service (Database)" as REPOAPPDATA
+    participant "Core OPC Client Service" as REPOAPPCLIENT
+
+    note left of ADMIN: Administrator is assumed to be authenticated and authorized via the Authentication Service before this sequence begins.
+    ADMIN-REPOAPPPRESENTATION: 1. Modifies client settings on dashboard and clicks 'Save'
+    activate REPOAPPPRESENTATION
+
+    REPOAPPPRESENTATION-REPOAPPMGMT: 2. PUT /api/clients/{id}/configuration (sends updated config)
+    activate REPOAPPMGMT
+
+    REPOAPPMGMT-REPOAPPMGMT: 2.1. Validate submitted configuration (e.g., URL format, data types)
+
+    alt Validation Success
+        note over REPOAPPMGMT: An alternative 'push' mechanism could be implemented where the Management Service publishes a 'config-updated' event to a message queue. This would trigger an immediate configuration pull instead of waiting for the periodic timer.
+        REPOAPPMGMT-REPOAPPDATA: 2.2.1. Persist updated configuration for client
+        activate REPOAPPDATA
+        REPOAPPDATA--REPOAPPMGMT: Success
+        deactivate REPOAPPDATA
+    else Validation Failure
+        REPOAPPMGMT--REPOAPPPRESENTATION: Return 400 Bad Request with validation errors
+    end
+
+    REPOAPPMGMT--REPOAPPPRESENTATION: 2.4. 200 OK (Config Saved)
+    deactivate REPOAPPMGMT
+
+    REPOAPPPRESENTATION--ADMIN: 3. Displays 'Configuration Saved' confirmation
+    deactivate REPOAPPPRESENTATION
+
+    loop On periodic timer for configuration check-in
+        REPOAPPCLIENT-REPOAPPMGMT: 4.1. GET /api/clients/{id}/configuration
+        activate REPOAPPMGMT
+        REPOAPPMGMT-REPOAPPDATA: 4.1.1. Retrieve latest configuration for client
+        activate REPOAPPDATA
+        REPOAPPDATA--REPOAPPMGMT: Configuration Data
+        deactivate REPOAPPDATA
+        REPOAPPMGMT--REPOAPPCLIENT: 4.2. Returns updated configuration data
+        deactivate REPOAPPMGMT
+    end
+
+    REPOAPPCLIENT-REPOAPPCLIENT: 5. Compares new config with current; applies if changed
+    note right of REPOAPPCLIENT: Applying the configuration is an internal process that may involve restarting connections, creating new subscriptions, and updating internal state.
+    REPOAPPCLIENT-REPOAPPCLIENT: 5.1. applyConfiguration(newConfig)
+
+    REPOAPPCLIENT-REPOAPPMGMT: 6. POST /api/clients/{id}/status (reports new status, e.g. 'ConfigurationApplied')
+    activate REPOAPPMGMT
+    REPOAPPMGMT-REPOAPPDATA: 6.1. Update client status in database
+    activate REPOAPPDATA
+    REPOAPPDATA--REPOAPPMGMT: Success
+    deactivate REPOAPPDATA
+    REPOAPPMGMT--REPOAPPCLIENT: 200 OK
+    deactivate REPOAPPMGMT

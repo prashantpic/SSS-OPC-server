@@ -1,0 +1,44 @@
+sequenceDiagram
+    actor "User" as User
+    participant "Blazor Web UI" as REPOAPPPRESENTATION
+    participant "Authentication Service" as REPOAPPAUTH
+    participant "External IdP" as ExternalIdP
+
+    User-REPOAPPPRESENTATION: 1. Clicks 'Login with IdP' button
+    activate REPOAPPPRESENTATION
+
+    REPOAPPPRESENTATION-REPOAPPAUTH: 2. POST /api/auth/external-login
+    activate REPOAPPAUTH
+    note over REPOAPPAUTH: Auth Service constructs OIDC authentication request with clientid, redirecturi, scope, state, and nonce.
+    REPOAPPAUTH--REPOAPPPRESENTATION: 3. Returns 302 Redirect to IdP Login URL
+    deactivate REPOAPPAUTH
+
+    REPOAPPPRESENTATION-ExternalIdP: 4. Redirects browser to IdP for authentication
+    activate ExternalIdP
+
+    User-ExternalIdP: 5. Enters credentials (username, password, MFA)
+    ExternalIdP--User: Authentication success
+
+    ExternalIdP-REPOAPPAUTH: 6. Redirects browser to callback URL with authorizationcode
+    activate REPOAPPAUTH
+
+    REPOAPPAUTH-ExternalIdP: 7. POST /token (Exchanges authcode for tokens)
+    note over ExternalIdP: This is a secure, server-to-server communication, not via the user's browser.
+    ExternalIdP--REPOAPPAUTH: idtoken, accesstoken
+
+    loop 8. Validates token & processes user session
+        REPOAPPAUTH-REPOAPPAUTH: 8.1. Validate token signature, issuer, audience, expiry
+        REPOAPPAUTH-REPOAPPAUTH: 8.2. Query local user store by token claims (e.g., email)
+        alt 8.3. If user not found, create new User record (JIT Provisioning)
+            REPOAPPAUTH-REPOAPPAUTH: Create new User record
+        end
+        REPOAPPAUTH-REPOAPPAUTH: 8.4. Map IdP roles/groups to internal system roles
+        REPOAPPAUTH-REPOAPPAUTH: 8.5. Create and sign a local JWT for the user session
+    end
+
+    REPOAPPAUTH--REPOAPPPRESENTATION: 9. Redirects to main application UI, setting session cookie
+    deactivate REPOAPPAUTH
+    deactivate ExternalIdP
+
+    REPOAPPPRESENTATION--User: 10. Renders authenticated user interface
+    deactivate REPOAPPPRESENTATION

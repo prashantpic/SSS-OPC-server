@@ -1,0 +1,50 @@
+sequenceDiagram
+    actor "User" as actoruser
+    participant "Presentation Layer (Blazor UI)" as REPOAPPPRESENTATION
+    participant "Data Service" as REPOAPPDATA
+    participant "Time-Series Database" as infratimeseriesdb
+
+    actoruser-REPOAPPPRESENTATION: 1. Selects tags, time range, and aggregation in Trend Visualization Tool
+    activate REPOAPPPRESENTATION
+
+    REPOAPPPRESENTATION-REPOAPPPRESENTATION: 2. Validates input and constructs query object
+
+    REPOAPPPRESENTATION-REPOAPPDATA: 3. Request Historical Data (e.g., GET /api/data/historical?tags=...)
+    activate REPOAPPDATA
+    note right of REPOAPPPRESENTATION: API call fulfills REQ-CSVC-011 and REQ-CSVC-012.
+
+    REPOAPPDATA-REPOAPPDATA: 4. Translate API request to native database query (Flux/SQL)
+
+    REPOAPPDATA-infratimeseriesdb: 5. ExecuteQuery(nativeQuery)
+    activate infratimeseriesdb
+    note left of infratimeseriesdb: Query execution and data storage fulfills REQ-DLP-001. Response time meets REQ-DLP-003.
+
+    alt 6.1 [Success] Return: Dataset
+        infratimeseriesdb--REPOAPPDATA: Return: Dataset
+        deactivate infratimeseriesdb
+        REPOAPPDATA-REPOAPPDATA: 6.1.1. Format dataset into DTO
+        REPOAPPDATA--REPOAPPPRESENTATION: 6.1.2. Return: 200 OK with HistoricalDataDTO
+        deactivate REPOAPPDATA
+    else 6.2 [No Data] Return: Empty Dataset
+        infratimeseriesdb--REPOAPPDATA: Return: Empty Dataset
+        deactivate infratimeseriesdb
+        REPOAPPDATA--REPOAPPPRESENTATION: 6.2.1. Return: 200 OK with empty data array
+        deactivate REPOAPPDATA
+    else 6.3 [Error] Return: Query Error / Timeout
+        infratimeseriesdb--REPOAPPDATA: Return: Query Error / Timeout
+        deactivate infratimeseriesdb
+        REPOAPPDATA-REPOAPPDATA: 6.3.1. Log the database error
+        REPOAPPDATA--REPOAPPPRESENTATION: 6.3.2. Return: 500 Internal Server Error
+        deactivate REPOAPPDATA
+    end
+
+    alt 7.1 [Success with data]
+        REPOAPPPRESENTATION-REPOAPPPRESENTATION: 7.1.1. Pass data to charting library and render trend
+        note right of REPOAPPPRESENTATION: Chart rendering fulfills REQ-UIX-004.
+        REPOAPPPRESENTATION--actoruser: 7.1.2. Display Trend Chart
+    else 7.2 [Success with no data]
+        REPOAPPPRESENTATION--actoruser: 7.2.1. Display 'No data available' message
+    else 7.3 [Error from backend]
+        REPOAPPPRESENTATION--actoruser: 7.3.1. Display 'Failed to retrieve data' error message
+    end
+    deactivate REPOAPP_PRESENTATION

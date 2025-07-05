@@ -1,0 +1,15 @@
+apiVersion: v2
+name: auth-service
+description: A Helm chart for the SSS OPC Authentication & Authorization microservice.
+
+# This signifies that this chart is a deployable application, though it will be
+# deployed as a dependency of the parent 'sss-opc-platform' chart.
+type: application
+
+# This is the chart version.
+# Increment this when you make changes to this sub-chart's templates.
+version: 0.1.0
+
+# This is the version of the auth-service application being deployed.
+# This version number should be updated with each new application release.
+appVersion: "1.0.0"

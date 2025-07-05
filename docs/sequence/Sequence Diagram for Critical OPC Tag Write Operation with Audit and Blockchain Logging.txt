@@ -1,0 +1,53 @@
+sequenceDiagram
+    actor "User" as User
+    participant "Web UI (Blazor)" as REPO-APP-PRESENTATION
+    participant "Core OPC Client" as REPO-APP-CLIENT
+    participant "OPC DA/UA Server" as OpcDaServer
+    participant "Message Queue" as REPO-APP-MESSAGING
+    participant "Data Service" as REPO-APP-DATA
+    participant "Integration Service" as REPO-APP-INTEGRATION
+    participant "Blockchain Network" as BlockchainNetwork
+
+    User-REPO-APP-PRESENTATION: 1. Initiates write for a critical tag
+    activate REPO-APP-PRESENTATION
+
+    REPO-APP-PRESENTATION-REPO-APP-CLIENT: 2. RequestWrite(tag, newValue, userContext)
+    activate REPO-APP-CLIENT
+
+    REPO-APP-CLIENT-OpcDaServer: 3. Write(tagAddress, newValue)
+    activate OpcDaServer
+    note over OpcDaServer: The initial write to the OPC Server is synchronous to provide immediate feedback to the user.
+    OpcDaServer--REPO-APP-CLIENT: 4. WriteResponse(Success)
+    deactivate OpcDaServer
+
+    REPO-APP-CLIENT--REPO-APP-PRESENTATION: 5. WriteConfirmation(status)
+    deactivate REPO-APP-CLIENT
+    deactivate REPO-APP-PRESENTATION
+
+    REPO-APP-CLIENT-REPO-APP-CLIENT: 6. [par] Asynchronously log audit and blockchain records
+    activate REPO-APP-CLIENT
+    note right of REPO-APP-CLIENT: The subsequent logging for audit and blockchain is asynchronous via a message queue. This decouples the systems and does not impact the primary write operation's latency.
+    par 
+        REPO-APP-CLIENT-REPO-APP-MESSAGING: 6a. Publish(topic='audit.writes', data={user, tag, old/new, ts})
+    and 
+        REPO-APP-CLIENT-REPO-APP-MESSAGING: 6b. Publish(topic='blockchain.log', data={hash, ts, src, dest})
+    end
+    deactivate REPO-APP-CLIENT
+
+    REPO-APP-MESSAGING-REPO-APP-DATA: 7. Delivers audit message
+    activate REPO-APP-DATA
+    note left of REPO-APP-DATA: The Data Service consumes the full audit record and stores it in a relational database for querying and reporting. (REQ-CSVC-009)
+    REPO-APP-DATA-REPO-APP-DATA: 7.1. Persist audit record to DataLog table
+    activate REPO-APP-DATA
+    REPO-APP-DATA--REPO-APP-DATA: Success
+    deactivate REPO-APP-DATA
+    deactivate REPO-APP-DATA
+
+    REPO-APP-MESSAGING-REPO-APP-INTEGRATION: 8. Delivers blockchain message
+    activate REPO-APP-INTEGRATION
+    note right of REPO-APP-INTEGRATION: The Integration Service consumes a message containing a hash of the critical data and commits it to a permissioned blockchain via a smart contract for tamper-evidence. (REQ-8-007, REQ-DLP-025)
+    REPO-APP-INTEGRATION-BlockchainNetwork: 8.1. CommitTransaction(dataHash, metadata)
+    activate BlockchainNetwork
+    BlockchainNetwork--REPO-APP-INTEGRATION: 8.2. TransactionReceipt
+    deactivate BlockchainNetwork
+    deactivate REPO-APP-INTEGRATION

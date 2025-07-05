@@ -1,0 +1,45 @@
+sequenceDiagram
+    actor User as "User"
+    participant REPOAPPRESENTATION as "Presentation Layer"
+    participant REPOAPPAI as "AI Service"
+    participant NlpService as "NLP Service"
+    participant REPOAPPDATA as "Data Service"
+
+    User-REPOAPPRESENTATION: 1. Enters natural language query (e.g., 'avg temp in Tank 1 yesterday')
+    activate REPOAPPRESENTATION
+    REPOAPPRESENTATION-REPOAPPAI: 2. POST /api/v1/nlq (queryText)
+    activate REPOAPPAI
+    note over REPOAPPAI: REQ-7-015: If NLP service returns ambiguous or low-confidence results, the AI service would return an error prompting the user to rephrase the query.
+
+    alt Happy Path
+        REPOAPPAI-NlpService: 2.1. POST /process (queryText)
+        activate NlpService
+        note over REPOAPPAI: REQ-7-016: The call to the external NLP Service is wrapped in a Circuit Breaker pattern to handle transient errors or service unavailability gracefully.
+        NlpService--REPOAPPAI: Returns structured intent and entities
+        deactivate NlpService
+
+        loop 2.2 Translate structured NLP response to internal query objects
+            note right of REPOAPPAI: REQ-7-014: AI Service translates human-friendly entities (e.g., 'Tank 1') into system-specific identifiers (e.g., a UUID tagId) by querying the Data Service.
+            REPOAPPAI-REPOAPPDATA: 2.2.1. GET /api/v1/tags?name='Tank 1 temperature'
+            activate REPOAPPDATA
+            REPOAPPDATA--REPOAPPAI: Returns tag metadata (e.g., tagId)
+            deactivate REPOAPPDATA
+        end
+
+        REPOAPPAI-REPOAPPDATA: 2.3. GET /api/v1/data/historical?tagId=...&agg=avg&start=...&end=...
+        activate REPOAPPDATA
+        REPOAPPDATA-REPOAPPDATA: 2.3.1. Executes optimized query on Time-Series DB
+        REPOAPPDATA--REPOAPPAI: Returns queried historical data result
+        deactivate REPOAPPDATA
+
+        loop 2.4 Format data result into a user-friendly answer
+            REPOAPPAI-REPOAPPAI: Format data result
+        end
+        REPOAPPAI--REPOAPPRESENTATION: 200 OK (answer)
+    else 4. Circuit Breaker is open due to repeated failures
+        REPOAPPAI--REPOAPPRESENTATION: 4.1. Returns Error: 'Natural Language Query service is temporarily unavailable.'
+    end
+
+    deactivate REPOAPPAI
+    REPOAPPRESENTATION--User: 3. Displays formatted answer: 'The average temperature was 25.5 C.'
+    deactivate REPOAPPRESENTATION

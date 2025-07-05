@@ -1,0 +1,44 @@
+sequenceDiagram
+    actor "User" as useractor
+    participant "Blazor UI" as REPOAPPPRESENTATION
+    participant "Authentication Service" as REPOAPPAUTH
+    participant "Data Service" as REPOAPPDATA
+
+    useractor-REPOAPPPRESENTATION: 1. Enters username and password, clicks Login
+    activate REPOAPPPRESENTATION
+    
+    REPOAPPPRESENTATION-REPOAPPAUTH: 2. POST /api/auth/login (username, password)
+    activate REPOAPPAUTH
+    
+    REPOAPPAUTH-REPOAPPDATA: 3. Request user record by username
+    activate REPOAPPDATA
+    
+    REPOAPPDATA--REPOAPPAUTH: Return User object with password hash (or null if not found)
+    deactivate REPOAPPDATA
+    
+    note over REPOAPPAUTH: Authentication Service hashes the submitted password using a secure, one-way algorithm (e.g., Argon2, bcrypt) and compares it with the hash stored in the database.
+    
+    alt 4.1 [User exists and password is valid]
+        REPOAPPAUTH-REPOAPPDATA: 4.1.1. Request user roles and permissions
+        activate REPOAPPDATA
+        REPOAPPDATA--REPOAPPAUTH: Return roles and permissions
+        deactivate REPOAPPDATA
+        
+        REPOAPPAUTH-REPOAPPAUTH: 4.1.2. Generate JWT with claims (user, roles, exp)
+        
+        REPOAPPAUTH--REPOAPPPRESENTATION: 4.1.3. Return 200 OK with JWT
+        
+        note over REPOAPPPRESENTATION: JWT is stored in a secure manner in the browser (e.g., HttpOnly cookie or browser memory) and included in the Authorization header for subsequent API requests.
+        REPOAPPPRESENTATION-REPOAPPPRESENTATION: 4.1.4. Store JWT securely and update auth state
+        
+        REPOAPPPRESENTATION--useractor: 4.1.5. Redirect to authenticated application view
+        
+    else 4.2 [User not found or password invalid]
+        REPOAPPAUTH--REPOAPPPRESENTATION: 4.2.1. Return 401 Unauthorized
+        
+        REPOAPPPRESENTATION--useractor: 4.2.2. Display 'Invalid Credentials' error message
+        
+    end
+    
+    deactivate REPOAPPAUTH
+    deactivate REPOAPPPRESENTATION

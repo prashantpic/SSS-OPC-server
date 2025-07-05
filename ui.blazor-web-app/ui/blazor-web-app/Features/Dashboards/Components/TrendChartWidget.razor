@@ -1,0 +1,115 @@
+@using ui.webapp.Models
+@using ui.webapp.ApiClient
+@using ui.webapp.Services
+@using ui.webapp.Shared.Feedback
+@implements IAsyncDisposable
+
+@inject IDataApiClient DataApiClient
+@inject INotificationService NotificationService
+@inject IJSRuntime JSRuntime
+
+<MudPaper Class="pa-2 fill-height d-flex flex-column">
+    <MudText Typo="Typo.h6">Data Trend</MudText>
+    <div class="flex-grow-1" style="position: relative;">
+        @if (_isLoading)
+        {
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
+                 <LoadingSpinner IsLoading="true" />
+            </div>
+        }
+        <div id="@_elementId" style="height: 100%; width: 100%;"></div>
+    </div>
+</MudPaper>
+
+@code {
+    [Parameter]
+    public List<string> TagIds { get; set; } = new();
+
+    [Parameter]
+    public TimeRange? TimeRange { get; set; }
+
+    private bool _isLoading = true;
+    private readonly string _elementId = $"chart-{Guid.NewGuid()}";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!TagIds.Any() || TimeRange is null)
+        {
+            return;
+        }
+
+        _isLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            var request = new HistoricalDataRequestDto
+            {
+                TagIds = this.TagIds,
+                StartTime = this.TimeRange.Start,
+                EndTime = this.TimeRange.End
+            };
+            
+            // This would normally call the API client. We'll use dummy data for now.
+            // var data = await DataApiClient.GetHistoricalDataAsync(request);
+            var data = GenerateDummyData();
+
+            var chartData = new
+            {
+                labels = data.Select(d => d.Timestamp).Distinct().OrderBy(t => t).Select(t => t.ToString("o")).ToArray(),
+                datasets = data.GroupBy(d => d.TagId)
+                               .Select(g => new
+                               {
+                                   label = g.Key,
+                                   data = g.OrderBy(d => d.Timestamp).Select(d => d.Value).ToArray(),
+                                   fill = false,
+                                   tension = 0.1
+                               }).ToArray()
+            };
+
+            var options = new { maintainAspectRatio = false };
+
+            await JSRuntime.InvokeVoidAsync("chartInterop.createChart", _elementId, "line", chartData, options);
+        }
+        catch (Exception ex)
+        {
+            NotificationService.ShowError($"Failed to load chart data: {ex.Message}");
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private List<HistoricalDataPointDto> GenerateDummyData()
+    {
+        var list = new List<HistoricalDataPointDto>();
+        var random = new Random();
+        var now = DateTimeOffset.UtcNow;
+        foreach (var tagId in TagIds)
+        {
+            for (int i = 0; i < 20; i++)
+            {
+                list.Add(new HistoricalDataPointDto
+                {
+                    TagId = tagId,
+                    Timestamp = now.AddMinutes(-i * 5),
+                    Value = (random.NextDouble() * 100).ToString("F2")
+                });
+            }
+        }
+        return list;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("chartInterop.destroyChart", _elementId);
+        }
+        catch (JSDisconnectedException)
+        {
+            // Ignore if the JS runtime is no longer available (e.g., page navigation)
+        }
+    }
+}

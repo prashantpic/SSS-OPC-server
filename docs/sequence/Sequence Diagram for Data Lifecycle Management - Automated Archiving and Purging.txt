@@ -1,0 +1,65 @@
+sequenceDiagram
+    actor "Scheduler «Trigger»" as Scheduler
+    participant "DataRetentionManager «Manager»" as ServerSideDataServiceDataRetentionManager
+    participant "Relational DB «Configuration & Audit»" as ServerSideDataServiceRelationalDbRepository
+    participant "Time-Series DB «Historical Data»" as ServerSideDataServiceTimeSeriesDbRepository
+    participant "Cold Storage «Archive»" as ServerSideDataServiceBlobStorageRepository
+
+    Scheduler-ServerSideDataServiceDataRetentionManager: 1. TriggerRetentionJob()
+    activate ServerSideDataServiceDataRetentionManager
+    note left of ServerSideDataServiceDataRetentionManager: Process is triggered by a scheduler (e.g., daily) to enforce compliance with REQ-DLP-017, REQ-DLP-018.
+
+    ServerSideDataServiceDataRetentionManager-ServerSideDataServiceRelationalDbRepository: 2. getPolicies(dataType='Historical')
+    activate ServerSideDataServiceRelationalDbRepository
+    ServerSideDataServiceRelationalDbRepository--ServerSideDataServiceDataRetentionManager: [Policy[]]
+    deactivate ServerSideDataServiceRelationalDbRepository
+
+    loop 3. For each policy
+        ServerSideDataServiceDataRetentionManager-ServerSideDataServiceTimeSeriesDbRepository: 4. findDataToArchive(policy)
+        activate ServerSideDataServiceTimeSeriesDbRepository
+        ServerSideDataServiceTimeSeriesDbRepository--ServerSideDataServiceDataRetentionManager: [DataCursor/Stream]
+        deactivate ServerSideDataServiceTimeSeriesDbRepository
+
+        loop 5. While cursor has data (process in batches)
+            note right of ServerSideDataServiceTimeSeriesDbRepository: Data is processed in batches to manage memory and avoid long-running transactions.
+
+            alt 6. Archival Outcome: Success
+                ServerSideDataServiceDataRetentionManager-ServerSideDataServiceBlobStorageRepository: 6.1. archiveBatch(dataBatch)
+                activate ServerSideDataServiceBlobStorageRepository
+                ServerSideDataServiceBlobStorageRepository--ServerSideDataServiceDataRetentionManager: archiveSuccess(location)
+                deactivate ServerSideDataServiceBlobStorageRepository
+                
+                note over ServerSideDataServiceTimeSeriesDbRepository: Purging of a data batch only occurs after it has been successfully archived to prevent data loss. This fulfills REQ-DLP-018 and REQ-DLP-030.
+                ServerSideDataServiceDataRetentionManager-ServerSideDataServiceTimeSeriesDbRepository: 6.1.1. purgeArchivedBatch(batchIdentifiers)
+                activate ServerSideDataServiceTimeSeriesDbRepository
+                ServerSideDataServiceTimeSeriesDbRepository--ServerSideDataServiceDataRetentionManager: purgeSuccess(recordsPurged)
+                deactivate ServerSideDataServiceTimeSeriesDbRepository
+
+                note over ServerSideDataServiceRelationalDbRepository: All data management actions are logged for audit purposes as per REQ-DLP-019.
+                ServerSideDataServiceDataRetentionManager-ServerSideDataServiceRelationalDbRepository: 6.1.2. logAction('Archived Batch', details)
+                activate ServerSideDataServiceRelationalDbRepository
+                ServerSideDataServiceRelationalDbRepository--ServerSideDataServiceDataRetentionManager: logSuccess()
+                deactivate ServerSideDataServiceRelationalDbRepository
+
+                ServerSideDataServiceDataRetentionManager-ServerSideDataServiceRelationalDbRepository: 6.1.3. logAction('Purged Batch', details)
+                activate ServerSideDataServiceRelationalDbRepository
+                ServerSideDataServiceRelationalDbRepository--ServerSideDataServiceDataRetentionManager: logSuccess()
+                deactivate ServerSideDataServiceRelationalDbRepository
+
+            else Archival Outcome: Failure
+                ServerSideDataServiceDataRetentionManager-ServerSideDataServiceRelationalDbRepository: 6.2. logAction('Archive Failed', errorDetails)
+                activate ServerSideDataServiceRelationalDbRepository
+                ServerSideDataServiceRelationalDbRepository--ServerSideDataServiceDataRetentionManager: logSuccess()
+                deactivate ServerSideDataServiceRelationalDbRepository
+
+                ServerSideDataServiceDataRetentionManager-ServerSideDataServiceDataRetentionManager: 6.2.1. break
+            end
+        end
+    end
+
+    ServerSideDataServiceDataRetentionManager-ServerSideDataServiceRelationalDbRepository: 7. logAction('Data Retention Job Finished', summary)
+    activate ServerSideDataServiceRelationalDbRepository
+    ServerSideDataServiceRelationalDbRepository--ServerSideDataServiceDataRetentionManager: logSuccess()
+    deactivate ServerSideDataServiceRelationalDbRepository
+
+    deactivate ServerSideDataServiceDataRetentionManager

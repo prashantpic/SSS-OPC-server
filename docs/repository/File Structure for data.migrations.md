@@ -1,0 +1,274 @@
+# Specification
+
+# 1. Files
+
+- **Path:** src/Data.Migrations/Data.Migrations.csproj  
+**Description:** The .NET 8 project file for the database migrations. It defines the project SDK, target framework, and dependencies. It includes a reference to the main Data.Access project (where entities are defined) and the necessary Entity Framework Core design-time packages for generating migrations.  
+**Template:** C# Project File  
+**Dependency Level:** 0  
+**Name:** Data.Migrations  
+**Type:** Configuration  
+**Relative Path:** .  
+**Repository Id:** REPO-SAP-013  
+**Pattern Ids:**
+    
+    
+**Members:**
+    
+    
+**Methods:**
+    
+    
+**Implemented Features:**
+    
+    - Project Configuration
+    - Dependency Management
+    
+**Requirement Ids:**
+    
+    - REQ-DLP-008
+    
+**Purpose:** To configure the migrations project, enabling it to reference domain entities and use EF Core tools.  
+**Logic Description:** This XML file will contain ItemGroup sections to specify the TargetFramework (net8.0), nullable settings, and PackageReference nodes for Microsoft.EntityFrameworkCore.Design and Microsoft.EntityFrameworkCore.Tools. It will also have a ProjectReference to the Data.Access project to access the DbContext and entity definitions.  
+**Documentation:**
+    
+    - **Summary:** Defines the project structure and dependencies for the database migrations project, allowing the EF Core command-line tools to function correctly.
+    
+**Namespace:**   
+**Metadata:**
+    
+    - **Category:** Configuration
+    
+- **Path:** src/Data.Migrations/appsettings.json  
+**Description:** JSON configuration file providing a design-time connection string for the Entity Framework Core tools. This allows developers to generate and apply migrations against a local or development database without hardcoding the connection string in code. It is not intended for production use.  
+**Template:** JSON Configuration  
+**Dependency Level:** 0  
+**Name:** appsettings  
+**Type:** Configuration  
+**Relative Path:** .  
+**Repository Id:** REPO-SAP-013  
+**Pattern Ids:**
+    
+    
+**Members:**
+    
+    
+**Methods:**
+    
+    
+**Implemented Features:**
+    
+    - Design-Time DB Configuration
+    
+**Requirement Ids:**
+    
+    - REQ-DLP-008
+    
+**Purpose:** To supply the EF Core tools with a database connection string during development.  
+**Logic Description:** The file will contain a JSON object with a 'ConnectionStrings' key. Inside this object, there will be a key (e.g., 'DefaultConnection') with its value being the connection string to a PostgreSQL development database.  
+**Documentation:**
+    
+    - **Summary:** Provides configuration settings, primarily the database connection string, used by the EF Core design-time tools to interact with the database.
+    
+**Namespace:**   
+**Metadata:**
+    
+    - **Category:** Configuration
+    
+- **Path:** src/Data.Migrations/DesignTimeDbContextFactory.cs  
+**Description:** A factory class used by Entity Framework Core design-time tools (like dotnet ef) to create an instance of the ApplicationDbContext. This is necessary because the migrations project is separate from the main application startup project, and this class provides a hook for creating the DbContext with the correct configuration (e.g., connection string from appsettings.json).  
+**Template:** C# Class  
+**Dependency Level:** 1  
+**Name:** DesignTimeDbContextFactory  
+**Type:** Factory  
+**Relative Path:** .  
+**Repository Id:** REPO-SAP-013  
+**Pattern Ids:**
+    
+    - FactoryPattern
+    
+**Members:**
+    
+    
+**Methods:**
+    
+    - **Name:** CreateDbContext  
+**Parameters:**
+    
+    - string[] args
+    
+**Return Type:** ApplicationDbContext  
+**Attributes:** public  
+    
+**Implemented Features:**
+    
+    - Design-Time DbContext Instantiation
+    
+**Requirement Ids:**
+    
+    - REQ-DLP-008
+    
+**Purpose:** To enable the EF Core tools to instantiate the ApplicationDbContext, which is defined in another project, for creating and applying migrations.  
+**Logic Description:** The class will implement the IDesignTimeDbContextFactory<ApplicationDbContext> interface. The CreateDbContext method will read the appsettings.json file, build a configuration object, retrieve the connection string, create a new DbContextOptionsBuilder, and configure it to use the PostgreSQL provider with the retrieved connection string. Finally, it will return a new instance of ApplicationDbContext.  
+**Documentation:**
+    
+    - **Summary:** This class provides the entry point for Entity Framework Core design-time tools to create instances of the ApplicationDbContext, enabling schema migration management from the command line.
+    
+**Namespace:** SSS.Data.Migrations  
+**Metadata:**
+    
+    - **Category:** DataAccess
+    
+- **Path:** src/Data.Migrations/Migrations/20250521100000_InitialCreate.cs  
+**Description:** The initial database migration script generated by EF Core. This script contains the C# code to create the initial set of tables based on the entity models, including User, Role, Permission, OpcServer, OpcTag, DataLog, HistoricalData, AlarmEvent, Dashboard, ReportTemplate, and their relationships and constraints. Applying this migration will set up the foundational schema of the relational database.  
+**Template:** C# EF Core Migration  
+**Dependency Level:** 2  
+**Name:** 20250521100000_InitialCreate  
+**Type:** Migration  
+**Relative Path:** Migrations  
+**Repository Id:** REPO-SAP-013  
+**Pattern Ids:**
+    
+    
+**Members:**
+    
+    
+**Methods:**
+    
+    - **Name:** Up  
+**Parameters:**
+    
+    - MigrationBuilder migrationBuilder
+    
+**Return Type:** void  
+**Attributes:** protected override  
+    - **Name:** Down  
+**Parameters:**
+    
+    - MigrationBuilder migrationBuilder
+    
+**Return Type:** void  
+**Attributes:** protected override  
+    
+**Implemented Features:**
+    
+    - Initial Database Schema Creation
+    
+**Requirement Ids:**
+    
+    - REQ-DLP-008
+    
+**Purpose:** To programmatically define the creation of the initial database schema.  
+**Logic Description:** The 'Up' method will contain a series of 'migrationBuilder.CreateTable' calls. Each call will define a table's columns (with types, constraints like nullability, primary keys), foreign keys ('migrationBuilder.AddForeignKey'), and unique constraints ('migrationBuilder.AddUniqueConstraint'). The 'Down' method will contain corresponding 'migrationBuilder.DropTable' calls to reverse the schema changes, ensuring the migration is reversible.  
+**Documentation:**
+    
+    - **Summary:** Represents the C# code for the initial database schema setup. The 'Up' method builds the schema, and the 'Down' method tears it down.
+    
+**Namespace:** SSS.Data.Migrations.Migrations  
+**Metadata:**
+    
+    - **Category:** DataAccess
+    
+- **Path:** src/Data.Migrations/Migrations/20250521100000_InitialCreate.Designer.cs  
+**Description:** A metadata file automatically generated by EF Core that is associated with the InitialCreate migration. It contains information about the EF Core version and the model structure at the time of the migration, used by EF Core for internal purposes.  
+**Template:** C# EF Core Designer File  
+**Dependency Level:** 2  
+**Name:** 20250521100000_InitialCreate.Designer  
+**Type:** MigrationMetadata  
+**Relative Path:** Migrations  
+**Repository Id:** REPO-SAP-013  
+**Pattern Ids:**
+    
+    
+**Members:**
+    
+    
+**Methods:**
+    
+    - **Name:** BuildTargetModel  
+**Parameters:**
+    
+    - ModelBuilder modelBuilder
+    
+**Return Type:** void  
+**Attributes:** protected override  
+    
+**Implemented Features:**
+    
+    - Migration Metadata
+    
+**Requirement Ids:**
+    
+    - REQ-DLP-008
+    
+**Purpose:** To provide EF Core with metadata about the 'InitialCreate' migration.  
+**Logic Description:** This is an auto-generated partial class that decorates the migration class with attributes and contains a snapshot of the model used to generate this specific migration. It should not be manually edited.  
+**Documentation:**
+    
+    - **Summary:** Auto-generated metadata file for the InitialCreate migration. Not intended for manual modification.
+    
+**Namespace:** SSS.Data.Migrations.Migrations  
+**Metadata:**
+    
+    - **Category:** DataAccess
+    
+- **Path:** src/Data.Migrations/Migrations/ApplicationDbContextModelSnapshot.cs  
+**Description:** An auto-generated file that represents the current state of the database model as understood by EF Core. It is updated every time a new migration is added and is used by EF Core to determine what changes need to be made when creating the next migration. This single file is a cumulative snapshot of the entire schema.  
+**Template:** C# EF Core Snapshot  
+**Dependency Level:** 2  
+**Name:** ApplicationDbContextModelSnapshot  
+**Type:** ModelSnapshot  
+**Relative Path:** Migrations  
+**Repository Id:** REPO-SAP-013  
+**Pattern Ids:**
+    
+    
+**Members:**
+    
+    
+**Methods:**
+    
+    - **Name:** BuildModel  
+**Parameters:**
+    
+    - ModelBuilder modelBuilder
+    
+**Return Type:** void  
+**Attributes:** protected override  
+    
+**Implemented Features:**
+    
+    - Database Model State
+    
+**Requirement Ids:**
+    
+    - REQ-DLP-008
+    
+**Purpose:** To maintain a snapshot of the current database model for generating future migrations.  
+**Logic Description:** This file contains a complete, programmatic representation of the entire database schema, including all tables, columns, keys, and relationships, defined using the ModelBuilder fluent API. It is updated automatically by the 'dotnet ef migrations add' command and should not be edited manually.  
+**Documentation:**
+    
+    - **Summary:** A snapshot of the entire database model. This file is used by Entity Framework Core to calculate the changes for subsequent migrations.
+    
+**Namespace:** SSS.Data.Migrations.Migrations  
+**Metadata:**
+    
+    - **Category:** DataAccess
+    
+
+
+---
+
+# 2. Configuration
+
+- **Feature Toggles:**
+  
+  
+- **Database Configs:**
+  
+  - ConnectionStrings:DefaultConnection
+  
+
+
+---
+
